@@ -1,0 +1,64 @@
+name: UI build check
+
+# `ui/index.html` is a build artifact committed so the packaged bundle is
+# reproducible and reviewable. Nothing stopped a source-only change from being
+# merged and released, which would ship the previous bundle — this job rebuilds
+# and fails when the committed artifact drifts from `frontend/src`.
+#
+# The release workflow (`plugin-release.yml`) packages whatever is in the repo,
+# so this check is the only thing keeping the artifact in sync.
+
+on:
+  push:
+    paths:
+      - "frontend/**"
+      - "ui/index.html"
+      - "vite.config.ts"
+      - "package.json"
+      - "package-lock.json"
+      - "tools/build-ui.mjs"
+      - "tools/ui-*.mjs"
+      - ".github/workflows/ui-build-check.yml"
+  pull_request:
+    paths:
+      - "frontend/**"
+      - "ui/index.html"
+      - "vite.config.ts"
+      - "package.json"
+      - "package-lock.json"
+      - "tools/build-ui.mjs"
+      - "tools/ui-*.mjs"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Bundle the workbench into a single ui/index.html
+        run: npm run build:ui
+
+      - name: Fail when the committed artifact is stale
+        run: |
+          if ! git diff --exit-code -- ui/index.html; then
+            echo "::error file=ui/index.html::ui/index.html does not match frontend/src — run 'npm run build:ui' and commit the result."
+            exit 1
+          fi
+
+      - name: Type and accessibility check
+        run: npm run check:ui
+
+      - name: Test suites (library, state, redaction, class coverage, boot)
+        run: npm run test:ui

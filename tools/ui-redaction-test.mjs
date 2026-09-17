@@ -1,304 +1,205 @@
 #!/usr/bin/env node
-// Redaction tests for the workbench UI.
+// Credential-redaction tests for the workbench UI.
 //
-// Runs against the SAME concatenated sources that are inlined into
-// ui/index.html, so these assertions cover exactly what ships. The bundle is
-// wrapped in one IIFE whose epilogue publishes the pure helpers on
-// `globalThis.__API_STUDIO_TEST__` (see tools/build-ui.mjs --emit-js); we load
-// it into a minimal browser shim, keeping `dbxPlugin.ready` pending forever so
-// no DOM wiring runs.
+// These import `frontend/src/lib/*` DIRECTLY — the same modules the bundled
+// `ui/index.html` is built from. The previous version of this suite bundled and
+// asserted against the retired vanilla UI, so it kept passing after the Svelte
+// rewrite dropped URL redaction entirely. Testing the shipped source is the
+// point; a test that covers a dead implementation is worse than no test.
 //
-// Zero dependencies; Node 18+.
+// Zero dependencies (Node 18+).
 //
 //   node tools/ui-redaction-test.mjs
 
-import { readFile, rm } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { tmpdir } from "node:os";
-
-const root = join(dirname(fileURLToPath(import.meta.url)), "..");
-const bundlePath = join(tmpdir(), `api-studio-ui-test-${process.pid}.js`);
-
-const { spawnSync } = await import("node:child_process");
-const build = spawnSync(process.execPath, [join(root, "tools", "build-ui.mjs"), "--emit-js", bundlePath], {
-  cwd: root,
-  encoding: "utf8",
-});
-if (build.status !== 0) {
-  console.error(build.stdout || "", build.stderr || "");
-  process.exit(2);
-}
-
-/* ---- minimal browser shim (no DOM work is performed before dbxPlugin.ready) ---- */
-
-const never = new Promise(() => {});
-const fakeElement = () => ({
-  style: {},
-  dataset: {},
-  classList: { add() {}, remove() {}, toggle() {} },
-  setAttribute() {},
-  removeAttribute() {},
-  append() {},
-  appendChild() {},
-  replaceChildren() {},
-  addEventListener() {},
-  removeEventListener() {},
-  querySelector: () => null,
-  querySelectorAll: () => [],
-  getBoundingClientRect: () => ({ x: 0, y: 0, width: 0, height: 0 }),
-});
-
-globalThis.window = {
-  dbxPlugin: {
-    ready: never,
-    locale: "en",
-    theme: { appearance: "light" },
-    context: {},
-    invoke: async () => ({}),
-  },
-  addEventListener() {},
-  removeEventListener() {},
-};
-globalThis.document = {
-  addEventListener() {},
-  querySelector: () => null,
-  querySelectorAll: () => [],
-  getElementById: () => null,
-  createElement: fakeElement,
-  createElementNS: fakeElement,
-  createDocumentFragment: fakeElement,
-  body: { dataset: {}, append() {}, appendChild() {} },
-  documentElement: { dataset: {}, style: {} },
-};
-// `navigator` is a getter-only global in modern Node; define it rather than assign.
-Object.defineProperty(globalThis, "navigator", {
-  value: { clipboard: { writeText: async () => {} } },
-  configurable: true,
-  writable: true,
-});
-
-await import(new URL(`file://${bundlePath.replace(/\\/g, "/")}`).href);
-await rm(bundlePath, { force: true });
-
-const api = globalThis.__API_STUDIO_TEST__;
-if (!api) {
-  console.error("test bundle did not expose __API_STUDIO_TEST__");
-  process.exit(2);
-}
-
-/* ---- assertions ---- */
+import {
+  AUTH_CREDENTIAL_FIELDS,
+  REDACTED,
+  isPlainVariableReference,
+  isSensitiveHeaderName,
+  isSensitiveQueryName,
+  redactCredentialValue,
+  redactRequestForHistory,
+  redactUrlForHistory,
+  sanitizeRequestForPersistence,
+  sanitizeTree,
+  stripUrlUserinfo,
+} from "../frontend/src/lib/redaction.js";
 
 let failures = 0;
 function check(name, condition, detail) {
-  if (condition) {
-    console.log("PASS", name);
-  } else {
-    failures++;
-    console.log("FAIL", name, detail === undefined ? "" : String(detail));
+  if (condition) console.log("PASS", name);
+  else {
+    failures += 1;
+    console.log("FAIL", name, detail ?? "");
   }
 }
 
-const LIVE = "live-secret-value";
+/* ----------------------------------------------------- sensitive name rules */
 
-function requestWithEveryCredentialShape() {
-  return {
-    version: 1,
-    name: "Login",
-    method: "POST",
-    url: `https://api.test/v1/users?access_token=${LIVE}&page=2`,
-    query: [
-      api.newRow("access_token", LIVE),
-      api.newRow("page", "2"),
-    ],
-    headers: [
-      api.newRow("Authorization", `Bearer ${LIVE}`),
-      api.newRow("X-API-Key", LIVE),
-      api.newRow("X-Tenant-Token", LIVE),
-      api.newRow("Accept", "application/json"),
-    ],
-    auth: { type: "bearer", token: LIVE, reveal: true },
-    body: { type: "json", text: `{"password":"${LIVE}"}` },
-    variables: [
-      { name: "apiKey", value: LIVE, secret: true },
-      { name: "host", value: "api.test", secret: false },
-    ],
-    settings: { timeoutMs: 30000, followRedirects: true, maxRedirects: 10, verifyTls: true },
-  };
+for (const name of [
+  "Authorization",
+  "proxy-authorization",
+  "Cookie",
+  "Set-Cookie",
+  "X-Api-Key",
+  "x-auth-token",
+  "X-Tenant-Token",
+  "x-service-password",
+  "Private-Token",
+  "x-goog-api-key",
+  "X-Amz-Security-Token",
+]) {
+  check(`sensitive header: ${name}`, isSensitiveHeaderName(name));
 }
-
-/* Credential channels = auth fields, credential-named headers/query, secret
- * variables, URL credential query values. Those must never reach disk. The
- * authored request body is request content (PRD §6.4 lists `body` as stored) and
- * is therefore excluded from this literal scan; history keeps no body at all. */
-function assertNoCredentialLiteral(label, value, request) {
-  const text = JSON.stringify(value);
-  const bodyText = JSON.stringify(request.body.text);
-  const withoutBody = text.split(bodyText).join('""');
-  check(label, !withoutBody.includes(LIVE), withoutBody.slice(0, 400));
+for (const name of ["Accept", "Content-Type", "User-Agent", "X-Request-Id", ""]) {
+  check(`not sensitive: ${name || "(empty)"}`, !isSensitiveHeaderName(name));
 }
+check("sensitive query: access_token", isSensitiveQueryName("access_token"));
+check("sensitive query: X-Amz-Signature", isSensitiveQueryName("X-Amz-Signature"));
+check("not sensitive query: page", !isSensitiveQueryName("page"));
 
-/* 1. Persistable request copy strips credentials, keeps {{references}} */
+/* ------------------------------------------------------- value redaction */
 
-const source = requestWithEveryCredentialShape();
-const sanitized = api.sanitizeRequestForPersistence(source);
-assertNoCredentialLiteral("persistable copy has no credential literal", sanitized, source);
-check("auth token neutralized", sanitized.auth.token === "[REDACTED]", sanitized.auth.token);
-check("auth reveal flag dropped", sanitized.auth.reveal === undefined);
+check("empty stays empty", redactCredentialValue("") === "");
+check("reference survives", redactCredentialValue("{{api_key}}") === "{{api_key}}");
+check("padded reference survives", redactCredentialValue("  {{ api_key }}  ") === "  {{ api_key }}  ");
+check("literal is redacted", redactCredentialValue("sk-live-123") === REDACTED);
+check("embedded reference is redacted", redactCredentialValue("Bearer {{api_key}}") === REDACTED);
+check("reference with invalid chars is redacted", redactCredentialValue("{{a b}}") === REDACTED);
+check("plain reference detection", isPlainVariableReference("{{a.b-c_1}}"));
 check(
-  "secret variable value stripped",
-  sanitized.variables.find((v) => v.name === "apiKey").value === "",
-);
-check(
-  "non-secret variable preserved",
-  sanitized.variables.find((v) => v.name === "host").value === "api.test",
-);
-check(
-  "credential headers redacted",
-  ["Authorization", "X-API-Key", "X-Tenant-Token"].every(
-    (name) => sanitized.headers.find((h) => h.key === name).value === "[REDACTED]",
-  ),
-);
-check(
-  "ordinary header preserved",
-  sanitized.headers.find((h) => h.key === "Accept").value === "application/json",
-);
-check("credential query value redacted", !sanitized.query.find((q) => q.key === "access_token").value.includes(LIVE));
-check("ordinary query preserved", sanitized.query.find((q) => q.key === "page").value === "2");
-check("url query credential redacted", !sanitized.url.includes(LIVE), sanitized.url);
-check("url keeps non-secret query", sanitized.url.includes("page=2"), sanitized.url);
-check("authored body preserved for collection storage", sanitized.body.text === source.body.text);
-
-/* 2. {{reference}} placeholders survive redaction */
-
-const referenced = requestWithEveryCredentialShape();
-referenced.auth.token = "{{access_token}}";
-referenced.headers = [api.newRow("Authorization", "Bearer {{access_token}}"), api.newRow("X-Api-Key-Ref", "{{apiKey}}")];
-const referencedCopy = api.sanitizeRequestForPersistence(referenced);
-check("pure reference token kept", referencedCopy.auth.token === "{{access_token}}", referencedCopy.auth.token);
-check(
-  "reference-only header value kept",
-  referencedCopy.headers.find((h) => h.key === "X-Api-Key-Ref").value === "{{apiKey}}",
-);
-check(
-  "header mixing a literal and a reference is redacted",
-  referencedCopy.headers.find((h) => h.key === "Authorization").value === "[REDACTED]",
-);
-check("isPlainVariableReference accepts padded form", api.isPlainVariableReference("  {{ a-b.c }} "));
-check("isPlainVariableReference rejects composite", !api.isPlainVariableReference("{{a}}{{b}}"));
-
-/* 3. persistableState() — the actual save payload — never carries credentials */
-
-api.State.collections = [
-  {
-    id: "c1",
-    type: "collection",
-    name: "C",
-    items: [
-      {
-        id: "r1",
-        type: "request",
-        name: "R",
-        request: requestWithEveryCredentialShape(),
-      },
-      {
-        id: "f1",
-        type: "folder",
-        name: "F",
-        items: [{ id: "r2", type: "request", name: "Nested", request: requestWithEveryCredentialShape() }],
-      },
-    ],
-  },
-];
-api.State.environments = [
-  {
-    id: "e1",
-    name: "dev",
-    prodLike: false,
-    confirmUnsafe: true,
-    variables: [
-      { name: "apiKey", value: LIVE, secret: true },
-      { name: "host", value: "api.test", secret: false },
-    ],
-  },
-];
-const persisted = api.persistableState();
-assertNoCredentialLiteral(
-  "state payload has no credential literal",
-  persisted,
-  requestWithEveryCredentialShape(),
-);
-check(
-  "nested folder request also sanitized",
-  persisted.collections[0].items[1].items[0].request.auth.token === "[REDACTED]",
-);
-check("secret env variable stripped", persisted.environments[0].variables[0].value === "");
-check("non-secret env variable kept", persisted.environments[0].variables[1].value === "api.test");
-check("in-memory request keeps working copy", api.State.collections[0].items[0].request.auth.token === LIVE);
-
-/* 4. History snapshot: no body text, credentials redacted */
-
-const history = api.redactRequestForHistory(requestWithEveryCredentialShape());
-const historyText = JSON.stringify(history);
-check("history has no credential literal", !historyText.includes(LIVE), historyText);
-check("history drops body text", history.body.text === "", history.body.text);
-check("history marks body redacted", history.body.redacted === true);
-check("history keeps body size hint", history.body.sizeBytes > 0, history.body.sizeBytes);
-check(
-  "history variable values emptied",
-  history.variables.every((v) => v.value === ""),
+  "credential fields cover every auth type",
+  AUTH_CREDENTIAL_FIELDS.bearer.includes("token") &&
+    AUTH_CREDENTIAL_FIELDS.basic.includes("password") &&
+    AUTH_CREDENTIAL_FIELDS.apikey.includes("keyValue"),
 );
 
-/* 5. Header / query sensitivity rules */
-
-for (const name of ["Authorization", "COOKIE", "x-api-key", "apikey", "X-Auth-Token", "X-Tenant-Token", "x-service-password", "Private-Token"]) {
-  check(`sensitive header: ${name}`, api.isSensitiveHeaderName(name));
-}
-for (const name of ["Accept", "Content-Type", "User-Agent", "X-Request-Id"]) {
-  check(`not sensitive: ${name}`, !api.isSensitiveHeaderName(name));
-}
-check("userinfo stripped from stored url", !api.redactUrlForHistory("https://u:p@api.test/x").includes("p@"));
-
-/* 6. Defaults stay credential-free (regression guard for new fields) */
-
-const blank = api.sanitizeRequestForPersistence(api.defaultRequest());
-check("default request has no auth literal", blank.auth.token === undefined);
-check("default request round-trips", blank.method === "GET");
-
-/* 7. Wiring: no save path may bypass the sanitizer. These are static checks on
- * the shipped bundle, so a future edit that persists raw state fails the suite. */
-
-const shipped = (await readFile(join(root, "ui", "index.html"), "utf8")).match(
-  /<script>([\s\S]*)<\/script>/,
-)[1];
+/* ------------------------------------------------------------- URL redaction */
 
 check(
-  "the only saveState call sends persistableState()",
-  /Api\.saveState\(persistableState\(\)\)/.test(shipped),
-  shipped.match(/Api\.saveState\([^)]*\)/g),
+  "userinfo is dropped",
+  stripUrlUserinfo("https://user:pass@host.test/x") === "https://host.test/x",
 );
 check(
-  "persistableState no longer deep-clones raw collections",
-  !/collections:\s*deepClone\(State\.collections\)/.test(shipped),
+  "userinfo without a path is dropped",
+  stripUrlUserinfo("https://user:pass@host.test") === "https://host.test",
+);
+check("no userinfo is left alone", stripUrlUserinfo("https://host.test/x") === "https://host.test/x");
+
+const queryRedacted = redactUrlForHistory("https://api.test/v1?access_token=SEKRET&page=2");
+check("query credential is redacted", queryRedacted.includes(`access_token=${REDACTED}`), queryRedacted);
+check("query credential value is gone", !queryRedacted.includes("SEKRET"), queryRedacted);
+check("ordinary query values survive", queryRedacted.includes("page=2"), queryRedacted);
+check(
+  "encoded query credential is redacted",
+  !redactUrlForHistory("https://api.test/v1?access%5Ftoken=SEKRET").includes("SEKRET"),
 );
 check(
-  "exactly one historyAppend call site",
-  (shipped.match(/Api\.historyAppend\(/g) || []).length === 1,
+  "fragment survives redaction",
+  redactUrlForHistory("https://api.test/v1?token=S#frag").endsWith("#frag"),
 );
 check(
-  "recordHistory builds its snapshot through redactRequestForHistory",
-  /redactRequestForHistory\(request\)/.test(shipped),
+  "userinfo without a query is redacted",
+  !redactUrlForHistory("https://user:pass@api.test/v1").includes("user:pass@"),
 );
 check(
-  "history construction does not slice raw body text",
-  !/bodyText\.slice|body\.text\.slice/.test(shipped),
+  "userinfo with a query is redacted",
+  !redactUrlForHistory("https://user:pass@api.test/v1?a=1").includes("user:pass@"),
 );
 check(
-  "no raw transport message is forwarded to the UI",
-  !/transport\(category, detail\)/.test(shipped),
+  "unparseable url is returned unchanged",
+  redactUrlForHistory("not a url") === "not a url",
 );
 
-console.log(
-  failures === 0 ? "\nALL UI REDACTION CHECKS PASSED" : `\n${failures} CHECK(S) FAILED`,
+/* ------------------------------------------- persistable request + history */
+
+const request = {
+  name: "Checkout",
+  method: "POST",
+  url: "https://user:pass@api.test/v1/orders?access_token=SEKRET&page=1",
+  headers: [
+    { id: "h1", key: "Authorization", value: "Bearer SEKRET", enabled: true },
+    { id: "h2", key: "X-Api-Key", value: "{{api_key}}", enabled: true },
+    { id: "h3", key: "Accept", value: "application/json", enabled: true },
+  ],
+  query: [
+    { id: "q1", key: "token", value: "SEKRET", enabled: true },
+    { id: "q2", key: "page", value: "1", enabled: true },
+  ],
+  auth: { type: "bearer", token: "SEKRET", reveal: true },
+  body: { type: "json", text: '{"card":"4111111111111111"}' },
+  variables: [{ id: "v1", key: "api_key", value: "SEKRET", secret: true }],
+  settings: { timeoutMs: 30000 },
+};
+
+const persistable = sanitizeRequestForPersistence(request);
+const persistableText = JSON.stringify(persistable);
+check("auth literal is redacted", persistable.auth.token === REDACTED, persistable.auth.token);
+check("auth reveal flag is dropped", !("reveal" in persistable.auth));
+check("credential header literal is redacted", persistable.headers[0].value === REDACTED);
+check("credential header reference survives", persistable.headers[1].value === "{{api_key}}");
+check("ordinary header survives", persistable.headers[2].value === "application/json");
+check("credential query literal is redacted", persistable.query[0].value === REDACTED);
+check("ordinary query survives", persistable.query[1].value === "1");
+check("secret variable value is emptied", persistable.variables[0].value === "");
+check("url credential is redacted", persistable.url.includes(`access_token=${REDACTED}`), persistable.url);
+check("url userinfo is dropped", !persistable.url.includes("user:pass@"));
+check("no literal credential survives serialisation", !persistableText.includes("SEKRET"));
+check("authored body is preserved for a stored request", persistable.body.text.includes("4111"));
+
+const historySnapshot = redactRequestForHistory(request);
+const historyText = JSON.stringify(historySnapshot);
+check("history drops body text", historySnapshot.body.text === "");
+check("history marks the body redacted", historySnapshot.body.redacted === true);
+check("history keeps the body size", historySnapshot.body.sizeBytes === request.body.text.length);
+check("history keeps the body type", historySnapshot.body.type === "json");
+check("history empties every variable value", historySnapshot.variables.every((v) => v.value === ""));
+check("history carries no credential", !historyText.includes("SEKRET"));
+check("history carries no card number", !historyText.includes("4111"));
+
+/* ------------------------------------------------------------ tree scrubbing */
+
+const tree = {
+  id: "col",
+  type: "collection",
+  name: "C",
+  items: [
+    {
+      id: "f",
+      type: "folder",
+      name: "F",
+      items: [{ id: "r", type: "request", name: "R", request }],
+    },
+  ],
+};
+const scrubbed = JSON.stringify(sanitizeTree(tree));
+check("nested requests are scrubbed", !scrubbed.includes("SEKRET"));
+check("nested structure is preserved", scrubbed.includes('"name":"F"') && scrubbed.includes('"name":"R"'));
+
+/* ----------------------------------------------- structural wiring invariants */
+
+const appSource = await (await import("node:fs/promises")).readFile(
+  new URL("../frontend/src/App.svelte", import.meta.url),
+  "utf8",
 );
-process.exit(failures === 0 ? 0 : 1);
+
+check(
+  "exactly one history-append call site",
+  (appSource.match(/api\.appendHistory\(/g) || []).length === 1,
+);
+check(
+  "the history snapshot is built through redactRequestForHistory",
+  /historyEntry\(\{[\s\S]*?request:\s*(snapshot|redactRequestForHistory)/.test(appSource) &&
+    appSource.includes("redactRequestForHistory(current.request)"),
+);
+check(
+  "persistence sends persistableState()",
+  /api\.saveState\(snapshot\)/.test(appSource) && appSource.includes("persistableState({"),
+);
+check(
+  "no raw request is sent to the save path",
+  !/api\.saveState\((?!snapshot)/.test(appSource),
+);
+
+console.log(failures ? `REDACTION CHECKS FAILED (${failures})` : "ALL REDACTION CHECKS PASSED");
+process.exit(failures ? 1 : 0);

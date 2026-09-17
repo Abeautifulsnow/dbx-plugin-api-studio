@@ -1,0 +1,1631 @@
+/* ==========================================================================
+   Components — controls, tabs, editors, response views, overlays, feedback.
+
+   Follows .trellis/tasks/09-17-api-studio-prd-ui/ui-style.md: flat DBX-native
+   surfaces, 8px spacing rhythm, controls 32–36px tall, body text >= 14px,
+   compact metadata 12px. Every interactive element keeps a visible focus ring
+   (the global :focus-visible rule in tokens.css). Monospace is used for URL,
+   JSON, headers, timing and code surfaces.
+   ========================================================================== */
+
+/* ----------------------------------------------------------------- buttons */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: var(--control-h, 34px);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--api-border);
+  border-radius: calc(var(--api-radius) - 2px);
+  background: var(--api-surface);
+  color: var(--api-fg);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--api-muted-bg);
+}
+
+.btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.btn svg {
+  flex: 0 0 auto;
+}
+
+.btn span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.btn--primary {
+  border-color: var(--api-primary);
+  background: var(--api-primary);
+  color: var(--api-primary-fg);
+}
+
+.btn--primary:hover:not(:disabled) {
+  background: var(--api-primary);
+  opacity: 0.92;
+}
+
+.btn--danger {
+  border-color: var(--api-danger);
+  background: var(--api-danger);
+  color: var(--color-destructive-foreground, #ffffff);
+}
+
+.btn--danger:hover:not(:disabled) {
+  background: var(--api-danger);
+  opacity: 0.92;
+}
+
+/* Send is the only filled primary action; it keeps its width when it becomes
+   Cancel so the command row does not shift mid-request. */
+.send {
+  min-width: 96px;
+}
+
+.icon-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: var(--icon-button, 28px);
+  height: var(--icon-button, 28px);
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: none;
+  color: var(--api-muted);
+  cursor: pointer;
+}
+
+/* ui-style.md: icon-only controls keep a 36px hit area. The visible box stays
+   28px; the extra 4px per side is only a pointer target, not a layout change. */
+.icon-btn::before {
+  content: "";
+  position: absolute;
+  inset: -4px;
+}
+
+.icon-btn:hover:not(:disabled) {
+  background: var(--api-muted-bg);
+  color: var(--api-fg);
+}
+
+.icon-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  padding: 0 var(--space-1);
+  border: 0;
+  background: none;
+  color: var(--api-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.link-btn:hover {
+  text-decoration: underline;
+}
+
+/* ------------------------------------------------------------------ inputs */
+
+.input,
+.select {
+  height: var(--control-h, 34px);
+  min-width: 0;
+  padding: 0 var(--space-2);
+  border: 1px solid var(--api-border);
+  border-radius: calc(var(--api-radius) - 2px);
+  background: var(--api-surface);
+  color: var(--api-fg);
+  font-size: 13px;
+}
+
+.input::placeholder {
+  color: var(--api-muted);
+}
+
+.input:disabled,
+.select:disabled {
+  background: var(--api-muted-bg);
+  color: var(--api-muted);
+  cursor: not-allowed;
+}
+
+.input[aria-invalid="true"] {
+  border-color: var(--api-danger);
+}
+
+.input[type="number"] {
+  font-variant-numeric: tabular-nums;
+}
+
+.select {
+  padding-right: var(--space-1);
+  cursor: pointer;
+}
+
+/* Method selector: textual label plus a redundant colour accent, never colour
+   alone (ui-style.md, Request command row). */
+.method-select {
+  flex: 0 0 auto;
+  width: 104px;
+  border-left-width: 3px;
+  border-left-style: solid;
+  border-left-color: currentColor;
+  color: var(--method-get);
+  font-weight: 600;
+}
+
+.method-select--GET {
+  color: var(--method-get);
+}
+
+.method-select--POST {
+  color: var(--method-post);
+}
+
+.method-select--PUT {
+  color: var(--method-put);
+}
+
+.method-select--PATCH {
+  color: var(--method-patch);
+}
+
+.method-select--DELETE {
+  color: var(--method-delete);
+}
+
+.search-field {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: var(--control-h, 34px);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--api-border);
+  border-radius: calc(var(--api-radius) - 2px);
+  background: var(--api-surface);
+}
+
+.search-field__icon {
+  flex: 0 0 auto;
+  color: var(--api-muted);
+}
+
+/* Stretched so the whole 34px field focuses the input, not just the thin text
+   box in the middle of it. */
+.search-field__input {
+  flex: 1 1 auto;
+  align-self: stretch;
+  min-width: 0;
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.search-field--inline {
+  flex: 0 1 auto;
+  max-width: 260px;
+}
+
+.checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  color: var(--api-fg);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.checkbox input[type="checkbox"] {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--api-primary);
+}
+
+.secret-field {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.secret-field > .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* ------------------------------------------------------------------- forms */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.field--inline {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.field--check {
+  justify-content: center;
+  min-height: var(--control-h, 34px);
+}
+
+.field__label {
+  color: var(--api-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.form-field__label {
+  color: var(--api-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Field-local validation: cause plus fix, announced through role=alert. */
+.field-error {
+  margin: 0;
+  color: var(--api-danger);
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------------ badges */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--api-border);
+  border-radius: 4px;
+  background: var(--api-muted-bg);
+  color: var(--api-fg);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.badge svg {
+  flex: 0 0 auto;
+}
+
+.badge--prod {
+  border-color: var(--api-danger);
+}
+
+.badge--prod svg {
+  color: var(--api-danger);
+}
+
+.badge--warning {
+  border-color: var(--method-post);
+}
+
+.badge--warning svg {
+  color: var(--method-post);
+}
+
+.badge--muted {
+  color: var(--api-muted);
+  font-family: var(--api-font-mono);
+  font-weight: 500;
+}
+
+/* Method tag: the method text carries the meaning, and its colour is a
+   redundant accent on the border and label (ui-style.md, Navigation). */
+.method-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 52px;
+  height: 20px;
+  padding: 0 6px;
+  border: 1px solid var(--api-border);
+  border-left: 3px solid currentColor;
+  border-radius: 4px;
+  background: var(--api-surface);
+  color: var(--method-get);
+  font-family: var(--api-font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.method-tag--GET {
+  color: var(--method-get);
+}
+
+.method-tag--POST {
+  color: var(--method-post);
+}
+
+.method-tag--PUT {
+  color: var(--method-put);
+}
+
+.method-tag--PATCH {
+  color: var(--method-patch);
+}
+
+.method-tag--DELETE {
+  color: var(--method-delete);
+}
+
+/* Status is a dot plus its text label, never the dot alone. */
+.status-dot {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--api-muted);
+}
+
+.status-dot--ok {
+  background: var(--method-get);
+}
+
+.status-dot--warn {
+  background: var(--method-post);
+}
+
+.status-dot--err {
+  background: var(--api-danger);
+}
+
+/* No result yet: hollow dot, always paired with explicit text. */
+.status-dot--none {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--api-muted);
+}
+
+.status-dot--cancelled {
+  background: transparent;
+  box-shadow: inset 0 0 0 2px var(--api-muted);
+}
+
+/* ---------------------------------------------------------------- notices */
+
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--api-border);
+  border-left: 3px solid var(--api-border);
+  border-radius: calc(var(--api-radius) - 2px);
+  background: var(--api-muted-bg);
+  color: var(--api-fg);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.notice svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--api-muted);
+}
+
+.notice span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.notice .link-btn {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+.notice--info {
+  border-left-color: var(--api-primary);
+}
+
+.notice--info svg {
+  color: var(--api-primary);
+}
+
+.notice--warning {
+  border-left-color: var(--method-post);
+}
+
+.notice--warning svg {
+  color: var(--method-post);
+}
+
+.empty-state {
+  margin: 0;
+  padding: var(--space-4);
+  color: var(--api-muted);
+  font-size: 13px;
+  line-height: 1.5;
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.empty-state--compact {
+  padding: var(--space-2);
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------------- tabs */
+
+.tabs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--api-border);
+}
+
+.tabs__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: var(--control-h, 34px);
+  margin-bottom: -1px;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--api-muted);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tabs__tab:hover {
+  color: var(--api-fg);
+}
+
+/* The active tab is marked by an underline indicator plus weight, not by
+   colour alone. */
+.tabs__tab--active {
+  border-bottom-color: var(--api-primary);
+  color: var(--api-fg);
+  font-weight: 600;
+}
+
+.tabs__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border: 1px solid var(--api-border);
+  border-radius: 9px;
+  background: var(--api-muted-bg);
+  color: var(--api-muted);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.segmented {
+  display: inline-flex;
+  align-items: stretch;
+  flex: 0 0 auto;
+  border: 1px solid var(--api-border);
+  border-radius: calc(var(--api-radius) - 2px);
+  overflow: hidden;
+}
+
+.segmented__item {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  padding: 0 var(--space-2);
+  border: 0;
+  background: var(--api-surface);
+  color: var(--api-muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.segmented__item + .segmented__item {
+  border-left: 1px solid var(--api-border);
+}
+
+.segmented__item:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.segmented__item--active {
+  background: var(--api-muted-bg);
+  color: var(--api-fg);
+  font-weight: 600;
+  box-shadow: inset 0 -2px 0 var(--api-primary);
+}
+
+/* -------------------------------------------------------- key/value editor */
+
+.kv {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  /* toggle | key | value | description | row menu (ui-style.md) */
+  --kv-cols: 32px minmax(96px, 1fr) minmax(140px, 1.6fr) minmax(96px, 1fr) 32px;
+}
+
+.kv__head,
+.kv__row {
+  display: grid;
+  grid-template-columns: var(--kv-cols);
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.kv__head {
+  padding: 0 var(--space-1);
+  color: var(--api-muted);
+  font-size: 12px;
+}
+
+.kv__row {
+  min-height: 36px;
+  border-radius: 6px;
+}
+
+.kv__cell {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kv__head .kv__cell {
+  padding-left: 2px;
+}
+
+.kv__cell--toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.kv__cell--toggle input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--api-primary);
+}
+
+.kv__cell--description {
+  max-width: 100%;
+}
+
+.kv__cell--menu {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.kv__value {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.kv__value .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.kv__reveal {
+  flex: 0 0 auto;
+}
+
+/* Disabled rows stay readable and stay in the tab order: muted text on a muted
+   surface rather than opacity, which would push the text under 4.5:1. */
+.kv__row--disabled {
+  background: var(--api-muted-bg);
+  box-shadow: inset 2px 0 0 var(--api-border);
+}
+
+.kv__row--disabled .input {
+  background: transparent;
+  color: var(--api-muted);
+}
+
+.kv__empty {
+  margin: 0;
+  padding: var(--space-2);
+  color: var(--api-muted);
+  font-size: 13px;
+}
+
+.kv__add {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  min-height: 32px;
+  padding: 0 var(--space-2);
+  border: 1px dashed var(--api-border);
+  border-radius: calc(var(--api-radius) - 2px);
+  background: none;
+  color: var(--api-muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.kv__add:hover {
+  border-color: var(--api-primary);
+  color: var(--api-primary);
+}
+
+/* ------------------------------------------------------------- auth editor */
+
+.auth {
+  display: grid;
+  grid-template-columns: minmax(0, 220px) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.auth__rail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  padding-right: var(--space-3);
+  border-right: 1px solid var(--api-border);
+}
+
+.auth__option {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 44px;
+  padding: var(--space-2);
+  border: 1px solid transparent;
+  border-left: 3px solid transparent;
+  border-radius: calc(var(--api-radius) - 2px);
+  background: none;
+  color: var(--api-fg);
+  text-align: left;
+  cursor: pointer;
+}
+
+.auth__option:hover {
+  background: var(--api-muted-bg);
+}
+
+.auth__option--active {
+  border-left-color: var(--api-primary);
+  background: var(--api-muted-bg);
+}
+
+.auth__option-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.auth__option-head svg {
+  flex: 0 0 auto;
+  color: var(--api-muted);
+}
+
+.auth__option-desc {
+  color: var(--api-muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.auth__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+  max-width: 560px;
+}
+
+.auth__desc {
+  margin: 0;
+  color: var(--api-muted);
+  font-size: 13px;
+}
+
+/* ------------------------------------------------------------ body / code */
+
+.body-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.body-toolbar__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.json-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--api-muted);
+  font-size: 12px;
+}
+
+.json-status svg {
+  flex: 0 0 auto;
+}
+
+.json-status--invalid {
+  color: var(--api-danger);
+}
+
+.code-area {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  flex: 1 1 auto;
+  min-height: 160px;
+  /* The textarea is the scroller; the grid only clips, so the gutter stays
+     aligned with the code it numbers. */
+  overflow: hidden;
+  border: 1px solid var(--api-border);
+  border-radius: calc(var(--api-radius) - 2px);
+  background: var(--api-muted-bg);
+}
+
+.code-gutter {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  border-right: 1px solid var(--api-border);
+  color: var(--api-muted);
+  font-family: var(--api-font-mono);
+  font-size: 12px;
+  line-height: 20px;
+  text-align: right;
+  user-select: none;
+}
+
+.code-gutter__line {
+  font-variant-numeric: tabular-nums;
+}
+
+.code-input {
+  min-width: 0;
+  min-height: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  background: transparent;
+  color: var(--api-fg);
+  font-size: 13px;
+  line-height: 20px;
+  resize: none;
+  overflow: auto;
+  tab-size: 2;
+}
+
+.settings-panel {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  align-items: start;
+  gap: var(--space-3) var(--space-4);
+  min-width: 0;
+}
+
+.settings-panel > .notice {
+  grid-column: 1 / -1;
+}
+
+/* ------------------------------------------------------- response / JSON */
+
+.response-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+.jv-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--api-border);
+  border-radius: calc(var(--api-radius) - 2px);
+  background: var(--api-muted-bg);
+  font-family: var(--api-font-mono);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.jv {
+  min-width: 0;
+}
+
+.jv--container {
+  min-width: 0;
+}
+
+.jv__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 2px;
+  min-width: 0;
+}
+
+.jv__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 14px;
+  width: 14px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--api-muted);
+  cursor: pointer;
+}
+
+.jv__toggle:hover {
+  background: var(--api-muted-bg);
+  color: var(--api-fg);
+}
+
+.jv__caret {
+  transition: transform 150ms ease;
+}
+
+.jv__caret--open {
+  transform: rotate(90deg);
+}
+
+.jv__key {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--api-token-key);
+  font-family: var(--api-font-mono);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.jv__key:hover {
+  text-decoration: underline;
+}
+
+.jv__punct {
+  flex: 0 0 auto;
+  color: var(--api-token-punct);
+}
+
+.jv__summary {
+  flex: 0 0 auto;
+  color: var(--api-muted);
+  font-size: 12px;
+}
+
+.jv__children {
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--api-border);
+}
+
+/* Scalars are buttons that copy on click, so they must read as tokens rather
+   than as controls. */
+.jv-string,
+.jv-number,
+.jv-literal,
+.jv-punct {
+  padding: 0;
+  border: 0;
+  background: none;
+  font-family: var(--api-font-mono);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.jv-string {
+  color: var(--api-token-string);
+}
+
+.jv-number {
+  color: var(--api-token-number);
+}
+
+.jv-literal {
+  color: var(--api-token-literal);
+}
+
+.jv-punct {
+  color: var(--api-token-punct);
+}
+
+.jv-string:hover,
+.jv-number:hover,
+.jv-literal:hover,
+.jv-punct:hover {
+  text-decoration: underline;
+}
+
+/* Pretty-printed JSON: a line-number gutter beside a scrollable code column. */
+.pretty-json {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--api-border);
+  border-radius: calc(var(--api-radius) - 2px);
+  background: var(--api-muted-bg);
+}
+
+.pretty-json__gutter {
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  left: 0;
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  border-right: 1px solid var(--api-border);
+  background: var(--api-muted-bg);
+  color: var(--api-muted);
+  font-family: var(--api-font-mono);
+  font-size: 12px;
+  line-height: 20px;
+  text-align: right;
+  user-select: none;
+}
+
+.pretty-json__num {
+  font-variant-numeric: tabular-nums;
+}
+
+.pretty-json__code {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  font-size: 13px;
+  line-height: 20px;
+  white-space: pre;
+}
+
+/* JSON token colours come from the --api-token-* theme variables so both
+   themes keep their contrast (ui-style.md, Response inspector). */
+.tok-key {
+  color: var(--api-token-key);
+}
+
+.tok-string {
+  color: var(--api-token-string);
+}
+
+.tok-number {
+  color: var(--api-token-number);
+}
+
+.tok-literal {
+  color: var(--api-token-literal);
+}
+
+.tok-punct {
+  color: var(--api-token-punct);
+}
+
+/* ------------------------------------------------------ headers & timing */
+
+.headers-table {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  border: 1px solid var(--api-border);
+  border-radius: calc(var(--api-radius) - 2px);
+}
+
+.headers-table__row {
+  display: grid;
+  grid-template-columns: minmax(140px, 260px) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-3);
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 0;
+  border-bottom: 1px solid var(--api-border);
+  background: none;
+  color: var(--api-fg);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.headers-table__row:hover {
+  background: var(--api-muted-bg);
+}
+
+.headers-table__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.headers-table__value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cookies__row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(120px, 1.4fr) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--api-border);
+  font-size: 12px;
+}
+
+.cookies__attrs {
+  min-width: 0;
+  color: var(--api-muted);
+  overflow-wrap: anywhere;
+}
+
+/* The table already draws the closing edge. */
+.headers-table__row:last-child,
+.cookies__row:last-child {
+  border-bottom: 0;
+}
+
+.timing {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+.timing__table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.timing__row th,
+.timing__row td {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid var(--api-border);
+  vertical-align: middle;
+  font-size: 13px;
+}
+
+.timing__row th {
+  color: var(--api-fg);
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.timing__row td {
+  text-align: right;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Scoped past `.timing__row td` on purpose: the phase bar cell is the one that
+   has to override the numeric alignment above. */
+.timing__row .timing__bar-cell {
+  width: 40%;
+  max-width: 420px;
+  text-align: left;
+}
+
+.timing__row .timing__na {
+  color: var(--api-muted);
+  font-size: 12px;
+}
+
+.timing__bar {
+  display: block;
+  width: 100%;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--api-muted-bg);
+  box-shadow: inset 0 0 0 1px var(--api-border);
+  overflow: hidden;
+}
+
+.timing__bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--api-primary);
+}
+
+/* Absent phases say so instead of showing an invented value. */
+.timing__row--unavailable th,
+.timing__row--unavailable td {
+  color: var(--api-muted);
+}
+
+.timing__note {
+  margin: var(--space-2) 0;
+  color: var(--api-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.info-grid {
+  display: grid;
+  grid-template-columns: minmax(88px, auto) minmax(0, 1fr);
+  gap: var(--space-1) var(--space-3);
+  margin: var(--space-2) 0 0;
+  font-size: 12px;
+}
+
+.info-grid dt {
+  color: var(--api-muted);
+}
+
+.info-grid dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--api-fg);
+  overflow-wrap: anywhere;
+}
+
+/* ----------------------------------------------------------- error states */
+
+.error-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--api-danger);
+  border-left: 3px solid var(--api-danger);
+  border-radius: calc(var(--api-radius) - 2px);
+  background: var(--api-muted-bg);
+}
+
+.error-card__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--api-fg);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.error-card__title svg {
+  flex: 0 0 auto;
+  color: var(--api-danger);
+}
+
+.error-card__category {
+  padding: 1px 5px;
+  border: 1px solid var(--api-border);
+  border-radius: 4px;
+  background: var(--api-surface);
+  color: var(--api-muted);
+  font-family: var(--api-font-mono);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.error-card__cause {
+  max-width: 100%;
+  margin: 0;
+  color: var(--api-fg);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.error-card__next {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  color: var(--api-fg);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+/* ---------------------------------------------------------------- overlays */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: var(--space-4);
+  background: rgba(15, 18, 22, 0.42);
+}
+
+body[data-theme="dark"] .backdrop {
+  background: rgba(0, 0, 0, 0.6);
+}
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  width: min(520px, 100%);
+  max-height: 100%;
+  overflow: hidden;
+  border: 1px solid var(--api-border);
+  border-radius: var(--api-radius);
+  background: var(--api-surface);
+  box-shadow: 0 12px 32px rgba(15, 18, 22, 0.2);
+}
+
+body[data-theme="dark"] .modal {
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
+
+.modal__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--api-border);
+}
+
+.modal__head h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.modal__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-4);
+}
+
+.modal__foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--api-border);
+}
+
+.modal__text {
+  margin: 0;
+  color: var(--api-fg);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.menu {
+  display: flex;
+  flex-direction: column;
+  position: fixed;
+  z-index: 90;
+  min-width: 176px;
+  max-width: 280px;
+  padding: var(--space-1);
+  border: 1px solid var(--api-border);
+  border-radius: var(--api-radius);
+  background: var(--api-surface);
+  box-shadow: 0 8px 24px rgba(15, 18, 22, 0.18);
+}
+
+body[data-theme="dark"] .menu {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+}
+
+.menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: 30px;
+  padding: 0 var(--space-2);
+  border: 0;
+  border-radius: calc(var(--api-radius) - 2px);
+  background: none;
+  color: var(--api-fg);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.menu__item:hover:not(:disabled),
+.menu__item:focus-visible {
+  background: var(--api-muted-bg);
+}
+
+.menu__item:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.menu__item svg {
+  flex: 0 0 auto;
+  color: var(--api-muted);
+}
+
+.menu__item span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menu__item--danger {
+  color: var(--api-danger);
+}
+
+.menu__item--danger svg {
+  color: var(--api-danger);
+}
+
+.menu__sep {
+  height: 1px;
+  margin: var(--space-1) 0;
+  background: var(--api-border);
+}
+
+.toast-region {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--space-2);
+  position: fixed;
+  right: var(--space-4);
+  bottom: var(--space-4);
+  z-index: 100;
+  max-width: min(360px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.toast {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--api-border);
+  border-left: 3px solid var(--api-primary);
+  border-radius: calc(var(--api-radius) - 2px);
+  background: var(--api-surface);
+  box-shadow: 0 8px 24px rgba(15, 18, 22, 0.18);
+  color: var(--api-fg);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+body[data-theme="dark"] .toast {
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+}
+
+/* ---------------------------------------------------- environment dialog */
+
+.env-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 220px) minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-4);
+  min-width: 0;
+  min-height: 280px;
+}
+
+.env-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  padding-right: var(--space-3);
+  border-right: 1px solid var(--api-border);
+}
+
+.env-list__item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 var(--space-2);
+  border: 1px solid transparent;
+  border-radius: calc(var(--api-radius) - 2px);
+  background: none;
+  color: var(--api-fg);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.env-list__item svg {
+  flex: 0 0 auto;
+  color: var(--api-danger);
+}
+
+.env-list__item span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.env-list__item:hover {
+  background: var(--api-muted-bg);
+}
+
+.env-list__item--active {
+  border-color: var(--api-border);
+  background: var(--api-muted-bg);
+  box-shadow: inset 2px 0 0 var(--api-primary);
+  font-weight: 600;
+}
+
+.env-list__create {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  margin-top: var(--space-2);
+}
+
+.env-list__create .input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.env-detail {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.env-detail__vars-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
+  font-size: 13px;
+}
+
+.env-vars {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.env-var {
+  display: grid;
+  grid-template-columns: minmax(88px, 1fr) minmax(120px, 1.6fr) auto auto;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+/* ------------------------------------------------------------- responsive */
+
+/* Component-level tightening. This file is imported after layout.css, so these
+   rules are the ones that win over the base declarations above. */
+@media (max-width: 1279px) {
+  .tabs {
+    padding-left: var(--space-3);
+    padding-right: var(--space-3);
+  }
+
+  /* Timing/diagnostics content tightens; the response body stays primary. */
+  .timing__row .timing__bar-cell {
+    width: 26%;
+  }
+}
+
+@media (max-width: 899px) {
+  .method-select {
+    width: 88px;
+  }
+
+  .send {
+    min-width: 80px;
+  }
+
+  .kv {
+    --kv-cols: 30px minmax(56px, 1fr) minmax(88px, 1.4fr) minmax(56px, 0.9fr) 30px;
+  }
+
+  .auth,
+  .env-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .auth__rail {
+    flex-direction: row;
+    flex-wrap: wrap;
+    padding-right: 0;
+    padding-bottom: var(--space-2);
+    border-right: 0;
+    border-bottom: 1px solid var(--api-border);
+  }
+
+  .auth__option {
+    flex: 1 1 150px;
+  }
+
+  .env-list {
+    padding-right: 0;
+    padding-bottom: var(--space-2);
+    border-right: 0;
+    border-bottom: 1px solid var(--api-border);
+  }
+
+  .settings-panel {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cookies__row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-1);
+  }
+}

@@ -1,0 +1,755 @@
+/* ==========================================================================
+   Layout — app shell, sidebar, workspace panes, splitter geometry, responsive.
+
+   Follows .trellis/tasks/09-17-api-studio-prd-ui/ui-style.md: a compact,
+   DBX-native technical workbench. Tokens come from tokens.css only.
+   Spacing uses the 4/8/12/16/24/32 rhythm, controls are 34px tall.
+   ========================================================================== */
+
+/* The UA hides [hidden] with `display:none`, but any author `display` rule on
+   the same element wins. This project shipped that bug twice, so the guard
+   stays global (frontend/spec/component-guidelines.md hard rule 1). */
+[hidden] {
+  display: none !important;
+}
+
+/* Native widgets (select popups, checkboxes, scrollbars) need to know the
+   theme, otherwise they render light-on-light in dark mode. */
+body {
+  color-scheme: light;
+}
+
+body[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+/* ------------------------------------------------------------------- shell */
+
+.app {
+  height: 100%;
+  display: grid;
+  /* Column 2 is the sidebar splitter (6px). */
+  grid-template-columns: var(--sidebar-w, 288px) 6px minmax(0, 1fr);
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Sidebar collapsed: neither the rail nor its splitter is rendered, so the
+   single remaining child must not fall into the 288px first column. */
+.app--sidebar-collapsed {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.app__notice {
+  /* Last grid row of .workspace; zero height when there is no boot error. */
+  grid-column: 1 / -1;
+  margin: 0;
+  border-radius: 0;
+  border-top: 1px solid var(--api-border);
+  border-right: 0;
+  border-bottom: 0;
+  border-left: 0;
+}
+
+.boot {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+  color: var(--api-muted);
+}
+
+.boot p {
+  margin: 0;
+  font-size: 14px;
+}
+
+/* ----------------------------------------------------------------- sidebar */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--api-surface);
+  border-right: 1px solid var(--api-border);
+}
+
+/* Collapsed rails are not rendered by App.svelte; the class exists so a
+   future inline collapse can hide the rail without a markup change. */
+.sidebar--collapsed {
+  display: none;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  min-height: 48px;
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--api-border);
+  min-width: 0;
+}
+
+.brand__mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--api-border);
+  border-radius: 6px;
+  background: var(--api-muted-bg);
+  color: var(--api-primary);
+}
+
+.brand__text {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.brand__title {
+  font-size: 13px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.brand__subtitle {
+  font-size: 12px;
+  color: var(--api-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+  padding: 0 var(--space-3);
+  min-width: 0;
+}
+
+/* The search control is shared with the response toolbar; inside the rail it
+   gets the rail's own gutter. */
+.sidebar .search-field {
+  flex: 0 0 auto;
+  margin: 0 var(--space-3);
+}
+
+.sidebar-section {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Collections take the free space; history is capped so it never competes
+   with the tree for vertical room (ui-style.md, Layout). */
+.sidebar-section--grow {
+  flex: 1 1 auto;
+  min-height: 96px;
+}
+
+.sidebar-section--history {
+  flex: 0 1 auto;
+  max-height: 44%;
+  margin-top: var(--space-1);
+  border-top: 1px solid var(--api-border);
+}
+
+.sidebar-section__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 var(--space-2) 0 var(--space-3);
+  min-width: 0;
+}
+
+.sidebar-section__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--api-muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sidebar-section__title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-section__count {
+  margin-left: auto;
+  flex: 0 0 auto;
+  color: var(--api-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.sidebar-section__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--api-muted);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.sidebar-section__toggle:hover {
+  color: var(--api-fg);
+}
+
+.sidebar-section__caret {
+  display: inline-flex;
+  flex: 0 0 auto;
+  transition: transform 150ms ease;
+}
+
+.sidebar-section__caret--open {
+  transform: rotate(90deg);
+}
+
+/* ------------------------------------------------------------------- tree */
+
+.tree {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 var(--space-2) var(--space-2);
+}
+
+.tree__group {
+  min-width: 0;
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 30px;
+  border-radius: 6px;
+  /* Nesting depth is written per row as `--tree-depth`. */
+  padding-left: calc(var(--tree-depth, 0) * 12px);
+}
+
+.tree-row__main {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 30px;
+  padding: 0 var(--space-1) 0 var(--space-1);
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--api-fg);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tree-row__main:hover {
+  background: var(--api-muted-bg);
+}
+
+.tree-row svg {
+  flex: 0 0 auto;
+  color: var(--api-muted);
+}
+
+.tree-row__caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 14px;
+  width: 14px;
+  transition: transform 150ms ease;
+}
+
+.tree-row__caret--open {
+  transform: rotate(90deg);
+}
+
+.tree-row__name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tree-row--request .tree-row__name {
+  font-weight: 400;
+}
+
+.tree-row--collection .tree-row__name,
+.tree-row--folder .tree-row__name {
+  font-weight: 500;
+}
+
+.tree-row__count {
+  flex: 0 0 auto;
+  padding: 0 var(--space-1);
+  color: var(--api-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The row menu is revealed on hover/focus-within; it stays in the tab order,
+   so a keyboard user still reaches it (opacity only, no display swap). */
+.tree-row__menu {
+  flex: 0 0 auto;
+  opacity: 0;
+  transition: opacity 150ms ease;
+}
+
+.tree-row:hover .tree-row__menu,
+.tree-row:focus-within .tree-row__menu {
+  opacity: 1;
+}
+
+.tree-row--active {
+  background: var(--api-muted-bg);
+  box-shadow: inset 2px 0 0 var(--api-primary);
+}
+
+.tree-row--active .tree-row__name {
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------------------- history */
+
+.history {
+  flex: 0 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 var(--space-2) var(--space-2);
+}
+
+.history-row {
+  display: flex;
+  border-radius: 6px;
+}
+
+.history-row + .history-row {
+  border-top: 1px solid var(--api-border);
+}
+
+.history-row__main {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-2);
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-2);
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--api-fg);
+  text-align: left;
+  cursor: pointer;
+}
+
+.history-row__main:hover {
+  background: var(--api-muted-bg);
+}
+
+.history-row--active {
+  background: var(--api-muted-bg);
+  box-shadow: inset 2px 0 0 var(--api-primary);
+}
+
+.history-row__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+/* A URL is a code surface (ui-style.md, Typography). */
+.history-row__url {
+  font-family: var(--api-font-mono);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-row__meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--api-muted);
+  font-size: 12px;
+}
+
+.history-row__meta > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-row__time {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------------- workspace */
+
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  /* rows: header, command row, tabs, editor, splitter, response, notice.
+     The editor row is capped at 62% so the response row keeps its 96px minimum
+     even when the splitter is dragged to its 80% limit, and neither row can
+     overflow the pane (nothing gets clipped and nothing needs a hidden
+     scrollbar). */
+  grid-template-rows:
+    auto
+    auto
+    auto
+    minmax(100px, min(var(--editor-h, 46%), 62%))
+    6px
+    minmax(96px, 1fr)
+    auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-width: 0;
+  min-height: 48px;
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--api-border);
+}
+
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.breadcrumb__icon {
+  flex: 0 0 auto;
+  color: var(--api-muted);
+}
+
+.breadcrumb__segment {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--api-muted);
+  font-size: 13px;
+}
+
+.breadcrumb__sep {
+  flex: 0 0 auto;
+  color: var(--api-muted);
+  font-size: 13px;
+}
+
+.breadcrumb__current {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+/* Persistent dirty marker: shape plus text, never colour alone. */
+.dirty-mark {
+  flex: 0 0 auto;
+  color: var(--api-danger);
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.header__tools {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
+/* ------------------------------------------------------------ command row */
+
+.command-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-2) var(--space-4);
+  border-bottom: 1px solid var(--api-border);
+}
+
+/* The URL keeps its room; neighbours shrink first (ui-style.md). */
+.url-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+}
+
+.command-row__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+}
+
+/* ----------------------------------------------------------- editor panes */
+
+.editor {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-3) var(--space-4) var(--space-4);
+}
+
+/* -------------------------------------------------------------- splitters */
+
+/* Both axes are 6px hit strips carrying a short grip line, so the divider is
+   always discoverable and reacts to hover and focus (ui-style.md). */
+.splitter {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: none;
+  touch-action: none;
+}
+
+.splitter--x {
+  width: 6px;
+  height: 100%;
+  flex-direction: column;
+  cursor: col-resize;
+}
+
+.splitter--y {
+  width: 100%;
+  height: 6px;
+  flex-direction: row;
+  cursor: row-resize;
+}
+
+.splitter__grip {
+  display: block;
+  border-radius: 2px;
+  background: var(--api-border);
+  transition: transform 150ms ease;
+}
+
+.splitter--x .splitter__grip {
+  width: 2px;
+  height: 48px;
+}
+
+.splitter--y .splitter__grip {
+  width: 48px;
+  height: 2px;
+}
+
+.splitter:hover {
+  background: var(--api-muted-bg);
+}
+
+.splitter:hover .splitter__grip,
+.splitter:focus-visible .splitter__grip {
+  background: var(--api-primary);
+}
+
+.splitter--x:hover .splitter__grip,
+.splitter--x:focus-visible .splitter__grip {
+  transform: scaleY(1.4);
+}
+
+.splitter--y:hover .splitter__grip,
+.splitter--y:focus-visible .splitter__grip {
+  transform: scaleX(1.4);
+}
+
+/* --------------------------------------------------------------- response */
+
+.response {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-top: 1px solid var(--api-border);
+}
+
+.response__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex: 0 0 auto;
+  min-width: 0;
+  padding: 0 var(--space-4);
+  border-bottom: 1px solid var(--api-border);
+}
+
+/* Result summary stays fixed while the pane below scrolls. */
+.response__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  min-width: 0;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.response__status {
+  font-weight: 600;
+}
+
+.response__dim {
+  color: var(--api-muted);
+  font-family: var(--api-font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The previous result must never look current: it is dimmed here and labelled
+   by .response__sending ("Sending new request…") in the markup. */
+.response__meta--stale {
+  opacity: 0.65;
+  transition: opacity 150ms ease;
+}
+
+.response__sending {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: var(--space-1) var(--space-4);
+  border-bottom: 1px solid var(--api-border);
+  background: var(--api-muted-bg);
+  color: var(--api-muted);
+  font-size: 12px;
+}
+
+.response__sending svg {
+  flex: 0 0 auto;
+  color: var(--api-primary);
+}
+
+.response__pane {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: var(--space-3) var(--space-4) var(--space-4);
+}
+
+.response__pane--stale {
+  opacity: 0.6;
+  transition: opacity 150ms ease;
+}
+
+/* ------------------------------------------------------------- responsive */
+
+/* Below 1280px the response body stays primary: only the timing/diagnostics
+   content tightens, and nothing is hidden horizontally. */
+@media (max-width: 1279px) {
+  .response__meta {
+    gap: var(--space-1);
+  }
+
+  /* Panes only — component-level tightening lives in components.css, which is
+     imported after this file and would otherwise be overridden by it. */
+  .command-row,
+  .editor,
+  .header,
+  .response__header,
+  .response__pane,
+  .response__sending {
+    padding-left: var(--space-3);
+    padding-right: var(--space-3);
+  }
+
+  .breadcrumb__segment {
+    max-width: 120px;
+  }
+}
+
+/* Below 900px: narrow the rail and drop non-essential header text. */
+@media (max-width: 899px) {
+  .app {
+    grid-template-columns: min(228px, var(--sidebar-w, 288px)) 6px minmax(0, 1fr);
+  }
+
+  /* Label text of the environment button; the icon keeps its title and the
+     button keeps its accessible name. */
+  .header__tools .btn span {
+    display: none;
+  }
+
+  .breadcrumb__segment,
+  .breadcrumb__sep {
+    display: none;
+  }
+
+  /* Wrap instead of clipping: the status summary is critical content. */
+  .response__meta {
+    flex-wrap: wrap;
+    white-space: normal;
+    row-gap: 2px;
+  }
+}

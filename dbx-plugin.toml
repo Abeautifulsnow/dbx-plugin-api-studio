@@ -6,11 +6,11 @@ directory = "backend"
 binary = "dbx-plugin-dbx-plugin-api-studio"
 
 [dev]
-# UI sources live in ui/src and are inlined into ui/index.html by the
-# zero-dependency bundler. The watcher prints DBX_UI_BUILD_SUCCESS after
-# every successful build so the dev host reloads plugin frames.
-ui_build = ["node", "tools/build-svelte-ui.mjs"]
-ui_watch = ["node", "tools/build-svelte-ui.mjs", "--watch"]
+# `frontend/src` is bundled by Vite and inlined into a single self-contained
+# `ui/index.html` (tools/build-ui.mjs). The watcher prints DBX_UI_BUILD_SUCCESS
+# on its own line after every successful build so the dev host reloads frames.
+ui_build = ["node", "tools/build-ui.mjs"]
+ui_watch = ["node", "tools/build-ui.mjs", "--watch"]
 
 [package]
-include = ["assets", "ui/svelte"]
+include = ["assets", "ui"]

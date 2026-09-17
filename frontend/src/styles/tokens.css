@@ -1,0 +1,119 @@
+/* Design tokens.
+   Only DBX semantic variables are used, each with an accessible local fallback
+   so the workbench is still legible if the host injects nothing (ui-style.md). */
+
+:root {
+  --api-bg: var(--color-background, #ffffff);
+  --api-surface: var(--color-card, #ffffff);
+  --api-fg: var(--color-foreground, #18181b);
+  --api-muted: var(--color-muted-foreground, #64748b);
+  --api-border: var(--color-border, #e2e8f0);
+  --api-primary: var(--color-primary, #16794a);
+  --api-primary-fg: var(--color-primary-foreground, #ffffff);
+  --api-danger: var(--color-destructive, #dc2626);
+  --api-muted-bg: var(--color-muted, #f6f7f9);
+  --api-radius: var(--radius, 8px);
+
+  --api-font-sans: var(--font-sans, Inter, ui-sans-serif, system-ui, sans-serif);
+  --api-font-mono: var(--font-mono, ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace);
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  --control-h: 34px;
+  --icon-button: 28px;
+
+  /* Method accents. Text always accompanies the colour (ui-style.md).
+     Contrast against --api-surface in the light theme: GET 4.79, POST 4.62,
+     PUT 5.94, PATCH 5.67, DELETE 4.83 (all >= 4.5:1). */
+  --method-get: #16834d;
+  --method-post: #a84d00;
+  --method-put: #2563b8;
+  --method-patch: #7c3aed;
+  --method-delete: #dc2626;
+}
+
+/* Dark theme: the host tokens already flip, these overrides only cover the
+   literal accent colours that cannot come from a token (contrast-checked). */
+body[data-theme="dark"] {
+  --api-muted-bg: var(--color-muted, #1c1f24);
+  --method-get: #4ade80;
+  --method-post: #fbbf24;
+  --method-put: #7dd3fc;
+  --method-patch: #c4b5fd;
+  --method-delete: #fca5a5;
+  --api-token-key: #c4b5fd;
+  --api-token-string: #86efac;
+  --api-token-number: #93c5fd;
+  --api-token-literal: #fdba74;
+  --api-token-punct: var(--color-muted-foreground, #94a3b8);
+}
+
+body {
+  --api-token-key: #7c3aed;
+  --api-token-string: #16794a;
+  --api-token-number: #2563b8;
+  --api-token-literal: #b45309;
+  --api-token-punct: #64748b;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--api-bg);
+  color: var(--api-fg);
+  font-family: var(--api-font-sans);
+  font-size: 14px;
+  overflow: hidden;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+/* The ring uses the foreground colour rather than the primary colour so it stays
+   visible on a filled primary/danger button as well as on plain surfaces. */
+:focus-visible {
+  outline: 2px solid var(--api-fg);
+  outline-offset: 1px;
+}
+
+.mono {
+  font-family: var(--api-font-mono);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

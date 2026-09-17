@@ -1,39 +1,193 @@
-<script lang="ts">
-  type Row = { id: string; key: string; value: string; enabled: boolean; secret?: boolean };
-  type Environment = { id: string; name: string; prodLike: boolean; confirmUnsafe: boolean; variables: Row[] };
-  export let environments: Environment[] = [];
-  export let selectedId = "";
-  export let onClose: () => void = () => {};
-  export let onChange: () => void = () => {};
-  export let onAdd: (name: string) => void = () => {};
-  let name = "";
-  let activeId = selectedId;
-  $: active = environments.find((item) => item.id === activeId);
-  const addVariable = () => { if (!active) return; active.variables = [...active.variables, { id: crypto.randomUUID(), key: "", value: "", enabled: true }]; environments = [...environments]; onChange(); };
+<script>
+  import { untrack } from "svelte";
+  import { newRow } from "../lib/model.js";
+  import Icon from "./Icon.svelte";
+  import Modal from "./Modal.svelte";
+
+  /**
+   * Environment manager. Secret variables are the supported way to keep a
+   * credential usable without storing it: resolving happens at send time and
+   * `persistableState` empties every secret value on save.
+   */
+  let {
+    environments = [],
+    selectedId = "",
+    t = (key) => key,
+    onClose = () => {},
+    onChange = () => {},
+    onAdd = () => {},
+    onDelete = () => {},
+  } = $props();
+
+  // `selectedId` only picks the environment to show when the dialog opens; the
+  // list selection is local from then on.
+  let activeId = $state(untrack(() => selectedId));
+  let newName = $state("");
+  let revealed = $state(new Set());
+
+  const active = $derived(environments.find((environment) => environment.id === activeId) || null);
+
+  function addEnvironment() {
+    const name = newName.trim();
+    if (!name) return;
+    const created = onAdd(name);
+    newName = "";
+    if (created?.id) activeId = created.id;
+  }
+
+  function toggleReveal(id) {
+    const next = new Set(revealed);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    revealed = next;
+  }
 </script>
 
-<div class="backdrop" role="presentation" on:click={(event) => event.target === event.currentTarget && onClose()}>
-  <div class="modal env-modal" role="dialog" aria-modal="true" aria-labelledby="env-title">
-    <header class="modal-header"><h2 id="env-title">Environments / 环境</h2><button class="icon-btn" on:click={onClose} aria-label="Close">×</button></header>
-    <div class="env-layout">
-      <nav class="env-list" aria-label="Environments">
-        {#each environments as environment}
-          <button class:active={environment.id === activeId} on:click={() => { activeId = environment.id; selectedId = activeId; onChange(); }}>{environment.prodLike ? "⚠ " : ""}{environment.name}</button>
-        {/each}
-        <div class="env-create"><input class="input" bind:value={name} placeholder="New environment / 新环境" /><button class="btn primary" on:click={() => { if (name.trim()) { onAdd(name.trim()); name = ""; } }}>＋</button></div>
-      </nav>
-      {#if active}
-        <div class="env-detail">
-          <label>Name / 名称<input class="input" bind:value={active.name} on:input={onChange} /></label>
-          <label class="check"><input type="checkbox" bind:checked={active.prodLike} on:change={onChange} /> Production-like / 类生产环境</label>
-          <label class="check"><input type="checkbox" bind:checked={active.confirmUnsafe} on:change={onChange} /> Confirm unsafe methods / 危险方法发送前确认</label>
-          <div class="env-vars-title"><strong>Variables / 变量</strong><button class="add-row" on:click={addVariable}>＋ Add</button></div>
+<Modal
+  title={t("envManagerTitle")}
+  titleId="env-title"
+  onClose={onClose}
+  width="min(760px, calc(100vw - 32px))"
+>
+  <div class="env-layout">
+    <nav class="env-list" aria-label={t("envManagerTitle")}>
+      {#each environments as environment (environment.id)}
+        <button
+          type="button"
+          class="env-list__item"
+          class:env-list__item--active={environment.id === activeId}
+          aria-pressed={environment.id === activeId}
+          onclick={() => (activeId = environment.id)}
+        >
+          {#if environment.prodLike}<Icon name="alert" />{/if}
+          <span>{environment.name}</span>
+        </button>
+      {/each}
+      {#if !environments.length}
+        <p class="empty-state empty-state--compact">{t("noEnvironments")}</p>
+      {/if}
+      <div class="env-list__create">
+        <input
+          class="input"
+          bind:value={newName}
+          placeholder={t("environmentName")}
+          aria-label={t("environmentName")}
+          onkeydown={(event) => {
+            if (event.key !== "Enter") return;
+            event.preventDefault();
+            addEnvironment();
+          }}
+        />
+        <button
+          type="button"
+          class="icon-btn"
+          title={t("newEnv")}
+          aria-label={t("newEnv")}
+          onclick={addEnvironment}
+        >
+          <Icon name="plus" />
+        </button>
+      </div>
+    </nav>
+
+    {#if active}
+      <div class="env-detail">
+        <div class="form-field">
+          <label class="form-field__label" for="env-name">{t("envName")}</label>
+          <input id="env-name" class="input" bind:value={active.name} oninput={onChange} />
+        </div>
+
+        <label class="checkbox">
+          <input type="checkbox" bind:checked={active.prodLike} onchange={onChange} />
+          <span>{t("prodLike")}</span>
+        </label>
+        <label class="checkbox">
+          <input type="checkbox" bind:checked={active.confirmUnsafe} onchange={onChange} />
+          <span>{t("confirmUnsafe")}</span>
+        </label>
+
+        <div class="env-detail__vars-head">
+          <strong>{t("addVariable")}</strong>
+          <button
+            type="button"
+            class="link-btn"
+            onclick={() => {
+              active.variables = [...active.variables, { ...newRow(), secret: false }];
+              onChange();
+            }}
+          >
+            <Icon name="plus" />
+            <span>{t("addVariable")}</span>
+          </button>
+        </div>
+
+        <div class="env-vars">
           {#each active.variables as variable (variable.id)}
-            <div class="env-variable"><input class="input mono" bind:value={variable.key} on:input={onChange} placeholder="base_url" /><input class="input mono" bind:value={variable.value} on:input={onChange} type={variable.secret ? "password" : "text"} placeholder="value" /><label class="check"><input type="checkbox" bind:checked={variable.secret} on:change={onChange} /> Secret</label><button class="icon-btn" on:click={() => { active.variables = active.variables.filter((item) => item.id !== variable.id); environments = [...environments]; onChange(); }} aria-label="Delete variable">×</button></div>
+            <div class="env-var">
+              <input
+                class="input mono"
+                bind:value={variable.key}
+                aria-label={t("key")}
+                placeholder="base_url"
+                spellcheck="false"
+                oninput={onChange}
+              />
+              <span class="secret-field">
+                <input
+                  class="input mono"
+                  type={variable.secret && !revealed.has(variable.id) ? "password" : "text"}
+                  bind:value={variable.value}
+                  aria-label={t("value")}
+                  placeholder={t("value")}
+                  spellcheck="false"
+                  oninput={onChange}
+                />
+                <button
+                  type="button"
+                  class="icon-btn"
+                  title={revealed.has(variable.id) ? t("hideValue") : t("revealValue")}
+                  aria-label={revealed.has(variable.id) ? t("hideValue") : t("revealValue")}
+                  onclick={() => toggleReveal(variable.id)}
+                >
+                  <Icon name={revealed.has(variable.id) ? "eyeOff" : "eye"} />
+                </button>
+              </span>
+              <label class="checkbox" title={t("secretNote")}>
+                <input type="checkbox" bind:checked={variable.secret} onchange={onChange} />
+                <span>{t("secret")}</span>
+              </label>
+              <button
+                type="button"
+                class="icon-btn"
+                title={t("deleteRow")}
+                aria-label={t("deleteRow")}
+                onclick={() => {
+                  active.variables = active.variables.filter((item) => item.id !== variable.id);
+                  onChange();
+                }}
+              >
+                <Icon name="trash" />
+              </button>
+            </div>
           {/each}
         </div>
-      {:else}<div class="empty">Create an environment / 创建环境</div>{/if}
-    </div>
-    <footer class="modal-actions"><button class="btn" on:click={onClose}>Done / 完成</button></footer>
+
+        <p class="notice notice--info">
+          <Icon name="info" />
+          <span>{t("secretNote")}</span>
+        </p>
+
+        <button type="button" class="btn btn--danger" onclick={() => onDelete(active)}>
+          <Icon name="trash" />
+          <span>{t("deleteEnv")}</span>
+        </button>
+      </div>
+    {:else}
+      <p class="empty-state">{t("noEnvSelected")}</p>
+    {/if}
   </div>
-</div>
+
+  {#snippet footer()}
+    <button type="button" class="btn" data-initial-focus onclick={onClose}>OK</button>
+  {/snippet}
+</Modal>

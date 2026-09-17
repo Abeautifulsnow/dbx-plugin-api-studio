@@ -1,72 +1,1008 @@
-<script lang="ts">
+<script>
   import { onMount } from "svelte";
-  import KeyValueEditor from "./components/KeyValueEditor.svelte";
-  import JsonTree from "./components/JsonTree.svelte";
+  import * as api from "./lib/api.js";
+  import { deepClone, debounce, uid, copyText } from "./lib/format.js";
+  import { normalizeLocale, translate } from "./lib/i18n.js";
+  import { valueAsText } from "./lib/jsonview.js";
+  import {
+    defaultRequest,
+    defaultSettings,
+    duplicateItem,
+    findCollectionOf,
+    findItem,
+    historyEntry,
+    migrateHistory,
+    migrateState,
+    newCollection,
+    newEnvironment,
+    newFolder,
+    newRequestItem,
+    newRow,
+    normalizeResponse,
+    persistableState,
+    removeItem,
+  } from "./lib/model.js";
+  import { redactRequestForHistory } from "./lib/redaction.js";
+  import { filterCollections } from "./lib/search.js";
+  import {
+    UNSAFE_METHODS,
+    buildSendSpec,
+    parseUrlQuery,
+    rebuildUrlQuery,
+    variableScope,
+  } from "./lib/variables.js";
+  import CommandRow from "./components/CommandRow.svelte";
+  import ConfirmDialog from "./components/ConfirmDialog.svelte";
   import EnvironmentDialog from "./components/EnvironmentDialog.svelte";
+  import HeaderBar from "./components/HeaderBar.svelte";
+  import Icon from "./components/Icon.svelte";
+  import Menu from "./components/Menu.svelte";
+  import Modal from "./components/Modal.svelte";
+  import PromptDialog from "./components/PromptDialog.svelte";
+  import RequestTabs from "./components/RequestTabs.svelte";
+  import ResponsePane from "./components/ResponsePane.svelte";
+  import Sidebar from "./components/Sidebar.svelte";
+  import Splitter from "./components/Splitter.svelte";
+  import Toasts from "./components/Toasts.svelte";
 
-  type Row = { id: string; key: string; value: string; enabled: boolean; secret?: boolean };
-  type Request = { version: number; name: string; method: string; url: string; query: Row[]; headers: Row[]; auth: any; body: any; variables: Row[]; settings: any };
-  type Item = { id: string; type: string; name: string; items?: Item[]; request?: Request };
-  type Env = { id: string; name: string; prodLike: boolean; confirmUnsafe: boolean; variables: Row[] };
-  const methods = ["GET", "POST", "PUT", "PATCH", "DELETE"];
-  const tabs = ["params", "headers", "auth", "body", "settings"];
-  const responseTabs = ["body", "headers", "timing"];
-  const unsafe = ["POST", "PUT", "PATCH", "DELETE"];
-  const redactNames = /authorization|cookie|token|secret|api[-_]?key|password|credential/i;
-  const querySecrets = /token|secret|key|password|passwd|signature|credential|auth/i;
-  const userIdPlaceholder = "{{userId}}";
-  const userId = "userId";
-  const t = (en: string, zh: string) => locale === "zh-CN" ? zh : en;
-  const uid = (prefix: string) => `${prefix}_${crypto.randomUUID?.() || Math.random().toString(36).slice(2)}`;
-  const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
-  const makeRow = (key = "", value = ""): Row => ({ id: uid("row"), key, value, enabled: true });
-  const makeRequest = (): Request => ({ version: 1, name: t("New request", "新请求"), method: "GET", url: "", query: [], headers: [], auth: { type: "none" }, body: { type: "none", text: "" }, variables: [], settings: { timeoutMs: 30000, followRedirects: true, maxRedirects: 10, verifyTls: true } });
-  let locale = "en", appearance = "light", ready = false, activeTab = "params", responseTab = "body", responseView = "text", search = "", selectedEnvId = "", error = "", sending = "", modal: "environment" | "unsaved" | "production" | null = null, pending: (() => void) | null = null;
-  let collections: Item[] = [], environments: Env[] = [], history: any[] = [], response: any = null, current = { id: uid("req"), request: makeRequest(), dirty: true, bodyRedacted: false };
-  let saveTimer: ReturnType<typeof setTimeout>;
-  let outcome: any = null;
-  const edit = (fn: (request: Request) => void) => { fn(current.request); current = { ...current, dirty: true }; scheduleSave(); };
-  const addRow = (target: Row[]) => { target.push(makeRow()); current = { ...current, dirty: true }; scheduleSave(); };
-  const removeRow = (target: Row[], item: Row) => { const index = target.indexOf(item); if (index >= 0) target.splice(index, 1); current = { ...current, dirty: true }; scheduleSave(); };
-  const syncQueryFromUrl = () => { const at = current.request.url.indexOf("?"); current.request.query = at < 0 ? [] : current.request.url.slice(at + 1).split("#")[0].split("&").filter(Boolean).map((part) => { const [key, ...rest] = part.split("="); return makeRow(decodeURIComponent(key || ""), decodeURIComponent(rest.join("=") || "")); }); current = { ...current, dirty: true }; scheduleSave(); };
-  const syncUrlFromQuery = () => { const base = current.request.url.split("?")[0]; const query = current.request.query.filter((item) => item.enabled && item.key).map((item) => `${encodeURIComponent(item.key)}=${encodeURIComponent(item.value)}`).join("&"); current.request.url = query ? `${base}?${query}` : base; current = { ...current, dirty: true }; scheduleSave(); };
-  $: selectedEnv = environments.find((item) => item.id === selectedEnvId);
-  $: if (current.bodyRedacted) error = t("The request body was not stored in history and needs to be re-entered.", "请求体不会写入历史记录，需要重新填写。");
-  $: if (error === t("Request cancelled", "请求已取消") && outcome?.kind !== "cancelled") outcome = { kind: "cancelled" };
-  $: if (error === t("Request cancelled", "请求已取消") && outcome?.kind !== "cancelled") outcome = { kind: "cancelled" };
-  $: visibleCollections = search ? collections.map((c) => ({ ...c, items: c.items?.filter((i) => i.name.toLowerCase().includes(search.toLowerCase()) || (i.request?.url || "").toLowerCase().includes(search.toLowerCase())) })).filter((c) => c.items?.length) : collections;
-  $: parsedResponse = response?.body?.text ? (() => { try { return JSON.parse(response.body.text); } catch { return null; } })() : null;
-  const scheduleSave = () => { clearTimeout(saveTimer); saveTimer = setTimeout(() => window.dbxPlugin.invoke("api/persistence/save", { state: { version: 1, collections: collections.map(sanitizeNode), environments: environments.map((e) => ({ ...clone(e), variables: e.variables.map((v) => ({ ...v, value: v.secret ? "" : v.value })) })), settings: { selectedEnvId } } }).catch(() => {}), 450); };
-  const sanitizeRequest = (request: Request, historyMode = false): Request => { const copy = clone(request), clean = (value: string) => !value ? "" : /^\{\{\s*[\w.-]+\s*\}\}$/.test(value.trim()) ? value : "[REDACTED]"; if (copy.auth.type === "bearer") copy.auth.token = clean(copy.auth.token || ""); if (copy.auth.type === "basic") copy.auth.password = clean(copy.auth.password || ""); if (copy.auth.type === "apikey") copy.auth.keyValue = clean(copy.auth.keyValue || ""); copy.headers = copy.headers.map((r) => ({ ...r, value: redactNames.test(r.key) ? clean(r.value) : r.value })); copy.query = copy.query.map((r) => ({ ...r, value: querySecrets.test(r.key) ? clean(r.value) : r.value })); copy.variables = copy.variables.map((r) => ({ ...r, value: r.secret ? "" : r.value })); if (historyMode) copy.body = { type: copy.body.type, text: "", redacted: true, sizeBytes: request.body.text.length }; return copy; };
-  const sanitizeNode = (node: Item): Item => ({ ...clone(node), items: node.items?.map((item) => item.type === "request" ? { ...clone(item), request: sanitizeRequest(item.request!) } : sanitizeNode(item)) });
-  const load = async () => { const loaded = await window.dbxPlugin.invoke<any>("api/persistence/load", {}); collections = loaded?.state?.collections || []; environments = loaded?.state?.environments || []; selectedEnvId = loaded?.state?.settings?.selectedEnvId || ""; history = loaded?.history || []; if (!collections.length) collections = [{ id: uid("col"), type: "collection", name: "My Collection", items: [{ id: uid("req"), type: "request", name: "Sample GET", request: { ...makeRequest(), name: "Sample GET", url: "https://httpbin.org/get", headers: [makeRow("Accept", "application/json")] } }] }]; };
-  const scope = () => { const values = new Map<string, Row>(); for (const item of selectedEnv?.variables || []) values.set(item.key, item); for (const item of current.request.variables) values.set(item.key, item); return values; };
-  const resolve = (value: string, mask = false) => { const missing: string[] = []; const output = value.replace(/\{\{\s*([\w.-]+)\s*\}\}/g, (whole, name) => { const item = scope().get(name); if (!item || !item.value) { missing.push(name); return whole; } return mask && item.secret ? whole : item.value; }); return { value: output, missing }; };
-  const buildSpec = (mask = false) => { const r = current.request, issues: string[] = [], url = resolve(r.url, mask), headers = r.headers.filter((x) => x.enabled && x.key).map((x) => ({ name: resolve(x.key, mask).value, value: resolve(x.value, mask).value })); if (url.missing.length || !/^https?:\/\//i.test(url.value)) issues.push("URL"); const add = (name: string, value: string) => { const old = headers.findIndex((h) => h.name.toLowerCase() === name.toLowerCase()); if (old >= 0) headers.splice(old, 1); headers.push({ name, value }); }; const a = r.auth; if (a.type === "bearer") { const x = resolve(a.token || "", mask); if (!x.value || x.missing.length) issues.push("Auth"); else add("Authorization", `Bearer ${x.value}`); } if (a.type === "basic") { const u = resolve(a.username || "", mask), p = resolve(a.password || "", mask); if (!p.value || u.missing.length || p.missing.length) issues.push("Auth"); else add("Authorization", `Basic ${btoa(`${u.value}:${p.value}`)}`); } if (a.type === "apikey") { const k = resolve(a.keyName || "", mask), v = resolve(a.keyValue || "", mask); if (!k.value || !v.value || k.missing.length || v.missing.length) issues.push("API Key"); else if (a.in === "query") url.value += `${url.value.includes("?") ? "&" : "?"}${encodeURIComponent(k.value)}=${encodeURIComponent(v.value)}`; else add(k.value, v.value); } let body: any = { type: "none" }; if (r.body.type !== "none") { const b = resolve(r.body.text, mask); body = { type: "raw", text: b.value }; if (b.missing.length) issues.push("Body"); if (r.body.type === "json") { try { JSON.parse(b.value); } catch { issues.push("JSON"); } } } const query = r.query.filter((x) => x.enabled && x.key).map((x) => `${encodeURIComponent(resolve(x.key, mask).value)}=${encodeURIComponent(resolve(x.value, mask).value)}`); if (query.length) url.value += `${url.value.includes("?") ? "&" : "?"}${query.join("&")}`; return { issues, spec: { requestId: uid("call"), method: r.method, url: url.value, headers, body, settings: { ...r.settings, maxBodyBytes: 2 * 1024 * 1024 } } }; };
-  const normalize = (r: any) => { if (r?.cancelled) { outcome = { kind: "cancelled" }; error = ""; return null; } return { ...r, headers: (r.headers || []).map((h: any) => ({ id: uid("header"), key: h.name || h.key || "", value: h.value || "", enabled: true })), body: r.body || { sizeBytes: 0 }, timing: r.timing || {} }; };
-  const send = async (confirmed = false) => { if (sending) return; const e = selectedEnv; if (!confirmed && e?.prodLike && e.confirmUnsafe && unsafe.includes(current.request.method)) { pending = () => send(true); modal = "production"; return; } error = ""; const built = buildSpec(); if (built.issues.length) { error = t(`Not sent: ${built.issues.join(", ")}`, `未发送：${built.issues.join("、")}`); return; } sending = built.spec.requestId; try { const result = await window.dbxPlugin.invoke<any>("api/request", built.spec, { timeoutMs: built.spec.settings.timeoutMs + 5000 }); if (result?.cancelled) { error = t("Request cancelled", "请求已取消"); } else response = normalize(result); } catch (e: any) { error = e?.message || t("Request failed", "请求失败"); } finally { sending = ""; } const safe = sanitizeRequest(current.request, true); const entry = { id: uid("history"), timestamp: Date.now(), name: safe.name, method: safe.method, url: safe.url, status: response?.status || null, durationMs: response?.timing?.totalMs || null, sizeBytes: response?.body?.sizeBytes || null, request: safe }; history = [entry, ...history].slice(0, 500); window.dbxPlugin.invoke("api/persistence/history-append", { entry }).catch(() => {}); };
-  const cancel = () => sending && window.dbxPlugin.invoke("api/cancel", { requestId: sending }).catch(() => {});
-  const openItem = (item: Item) => { if (!item.request) return; guard(() => { current = { id: item.id, request: clone(item.request!), dirty: false, bodyRedacted: false }; response = null; }); };
-  const saveCurrent = () => { const item = find(current.id); if (item) { item.request = clone(current.request); item.name = current.request.name; } else if (collections[0]) (collections[0].items ||= []).push({ id: current.id, type: "request", name: current.request.name, request: clone(current.request) }); current = { ...current, dirty: false }; collections = [...collections]; scheduleSave(); };
-  const find = (id: string, nodes = collections): Item | null => { for (const item of nodes) { if (item.id === id) return item; const found = item.items && find(id, item.items); if (found) return found; } return null; };
-  const guard = (action: () => void) => { if (current.dirty) { pending = action; modal = "unsaved"; } else action(); };
-  const finishModal = (action: "save" | "discard" | "cancel") => { const next = pending; pending = null; modal = null; if (action === "save") saveCurrent(); if (action !== "cancel") next?.(); };
-  const copy = async (value: string) => { try { await navigator.clipboard.writeText(value); } catch { error = t("Copy failed", "复制失败"); } };
-  const copyCurl = async () => { try { const result = await window.dbxPlugin.invoke<any>("api/export-curl", buildSpec(true).spec, { timeoutMs: 10000 }); await copy(result.curl || ""); } catch (e: any) { error = e?.message || t("cURL export failed", "cURL 导出失败"); } };
-  const formatBody = (pretty: boolean) => { try { current.request.body.text = JSON.stringify(JSON.parse(current.request.body.text), null, pretty ? 2 : 0); current = { ...current, dirty: true }; scheduleSave(); } catch { error = t("Invalid JSON", "JSON 格式无效"); } };
-  const addEnvironment = (name: string) => { const item: Env = { id: uid("env"), name, prodLike: false, confirmUnsafe: true, variables: [] }; environments = [...environments, item]; selectedEnvId = item.id; scheduleSave(); };
-  const onShortcut = (event: KeyboardEvent) => { const mod = event.ctrlKey || event.metaKey; if (mod && event.key === "Enter") { event.preventDefault(); sending ? cancel() : send(); } else if (mod && event.key.toLowerCase() === "s") { event.preventDefault(); saveCurrent(); } else if (mod && event.key.toLowerCase() === "n") { event.preventDefault(); newRequest(); } else if (mod && event.key.toLowerCase() === "l") { event.preventDefault(); (document.querySelector(".url-input") as HTMLInputElement)?.focus(); } else if (event.shiftKey && event.altKey && event.key.toLowerCase() === "f") { event.preventDefault(); formatBody(true); } };
-  const newRequest = () => guard(() => { current = { id: uid("req"), request: makeRequest(), dirty: true, bodyRedacted: false }; response = null; });
-  const addFolder = () => { const collection = collections[0]; if (!collection) return; collection.items = [...(collection.items || []), { id: uid("folder"), type: "folder", name: t("New folder", "新文件夹"), items: [] }]; collections = [...collections]; scheduleSave(); };
-  onMount(async () => { await window.dbxPlugin.ready; locale = window.dbxPlugin.locale?.toLowerCase().startsWith("zh") ? "zh-CN" : "en"; appearance = window.dbxPlugin.theme?.appearance === "dark" ? "dark" : "light"; await load(); ready = true; });
-  if (typeof window !== "undefined") window.addEventListener("dbx-plugin-env", () => { locale = window.dbxPlugin.locale?.toLowerCase().startsWith("zh") ? "zh-CN" : "en"; appearance = window.dbxPlugin.theme?.appearance === "dark" ? "dark" : "light"; });
+  /* ------------------------------------------------------------------ state */
+
+  let locale = $state("en");
+  let appearance = $state("light");
+  let ready = $state(false);
+  let loaded = $state(false);
+  let loadError = $state("");
+
+  let collections = $state([]);
+  let environments = $state([]);
+  let settings = $state(defaultSettings());
+  let history = $state([]);
+
+  /** The editor buffer: unsaved until written into a collection. */
+  let current = $state({
+    id: "",
+    request: defaultRequest(),
+    dirty: false,
+    bodyRedacted: false,
+    collectionId: null,
+  });
+
+  let responses = $state({});
+  let receivedAt = $state({});
+  let sending = $state("");
+  let outcome = $state(null);
+  let sendIssues = $state({});
+
+  let activeTab = $state("params");
+  let search = $state("");
+  let expanded = $state(new Set());
+  let historyActiveId = $state("");
+
+  let menu = $state(null);
+  let prompt = $state(null);
+  let confirmDialog = $state(null);
+  let pendingAction = $state(null);
+  let pendingSend = $state(false);
+  let envOpen = $state(false);
+
+  let toasts = $state([]);
+  let polite = $state("");
+  let assertive = $state("");
+
+  /* ---------------------------------------------------------------- derived */
+
+  const t = (key, params) => translate(locale, key, params);
+  const selectedEnv = $derived(
+    environments.find((environment) => environment.id === settings.selectedEnvId) || null,
+  );
+  const visibleCollections = $derived(filterCollections(collections, search));
+  const response = $derived(responses[current.id] ?? null);
+  const error = $derived(
+    outcome?.kind === "error" ? { category: outcome.category, message: outcome.message } : null,
+  );
+  const cancelled = $derived(outcome?.kind === "cancelled");
+  /** Ancestors of the open request, for the breadcrumb. */
+  const currentPath = $derived.by(() => {
+    const segments = [];
+    const walk = (items, trail) => {
+      for (const item of items) {
+        if (item.id === current.id) {
+          segments.push(...trail);
+          return true;
+        }
+        if (item.items && walk(item.items, [...trail, item])) return true;
+      }
+      return false;
+    };
+    walk(collections, []);
+    return segments;
+  });
+
+  /* ------------------------------------------------------------ persistence */
+
+  const persist = debounce((snapshot) => {
+    api.saveState(snapshot).catch((failure) => {
+      const message = t("announceSaveFailed", { reason: failure?.message ?? String(failure) });
+      toast(message);
+      announcePolite(message);
+    });
+  }, 600);
+
+  $effect(() => {
+    // Reading through `persistableState` subscribes this effect to exactly the
+    // state that is persisted (and to nothing else).
+    const snapshot = persistableState({ collections, environments, settings });
+    if (!loaded) return;
+    persist(snapshot);
+  });
+
+  $effect(() => {
+    document.body.dataset.theme = appearance;
+  });
+
+  /* --------------------------------------------------------------- feedback */
+
+  function toast(message) {
+    const id = uid("toast");
+    toasts = [...toasts, { id, message }];
+    setTimeout(() => (toasts = toasts.filter((item) => item.id !== id)), 2400);
+  }
+
+  function announcePolite(message) {
+    polite = "";
+    queueMicrotask(() => (polite = message));
+  }
+
+  function announceAssertive(message) {
+    assertive = "";
+    queueMicrotask(() => (assertive = message));
+  }
+
+  async function copyToClipboard(text, successMessage) {
+    const ok = await copyText(text);
+    toast(ok ? (successMessage ?? t("copied")) : t("copyFailed"));
+  }
+
+  /* ------------------------------------------------------------- navigation */
+
+  /** Ask about unsaved edits before replacing the editor buffer. */
+  function guard(action) {
+    if (current.dirty) {
+      pendingAction = action;
+      return;
+    }
+    action();
+  }
+
+  function openRequest(node) {
+    guard(() => {
+      const collection = findCollectionOf(collections, node.id);
+      current = {
+        id: node.id,
+        request: deepClone(node.request),
+        dirty: false,
+        bodyRedacted: false,
+        collectionId: collection?.id ?? null,
+      };
+      sendIssues = {};
+      outcome = null;
+    });
+  }
+
+  function newRequest() {
+    guard(() => {
+      const request = defaultRequest();
+      request.name = t("draftName");
+      current = {
+        id: uid("req"),
+        request,
+        dirty: true,
+        bodyRedacted: false,
+        collectionId: collections[0]?.id ?? null,
+      };
+      activeTab = "params";
+      sendIssues = {};
+      outcome = null;
+    });
+  }
+
+  function openHistory(entry) {
+    guard(() => {
+      const hadBody = !!entry.request?.body?.type && entry.request.body.type !== "none";
+      current = {
+        id: uid("req"),
+        request: deepClone(entry.request),
+        dirty: true,
+        bodyRedacted: hadBody,
+        collectionId: null,
+      };
+      historyActiveId = entry.id;
+      sendIssues = {};
+      outcome = null;
+      announcePolite(
+        hadBody
+          ? `${t("restoredFromHistory")} ${t("bodyNotRestored")}`
+          : t("restoredFromHistory"),
+      );
+      toast(hadBody ? t("bodyNotRestored") : t("restoredFromHistory"));
+    });
+  }
+
+  function saveCurrent() {
+    if (!current.request.name.trim()) current.request.name = t("draftName");
+    const existing = findItem(collections, current.id);
+    if (existing) {
+      existing.item.name = current.request.name;
+      existing.item.request = deepClone(current.request);
+    } else {
+      if (!collections.length) collections = [newCollection("My Collection")];
+      const target =
+        (current.collectionId && findItem(collections, current.collectionId)?.item) ||
+        collections[0];
+      target.items = [
+        ...(target.items || []),
+        {
+          id: current.id,
+          type: "request",
+          name: current.request.name,
+          request: deepClone(current.request),
+        },
+      ];
+      current.collectionId = target.id;
+    }
+    current.dirty = false;
+    announcePolite(t("announceSaved"));
+    toast(t("announceSaved"));
+  }
+
+  /* ------------------------------------------------------------------- tree */
+
+  function sameNameSibling(items, name, ignoreId = null) {
+    return (items || []).some(
+      (item) =>
+        item.id !== ignoreId && item.name.trim().toLowerCase() === name.trim().toLowerCase(),
+    );
+  }
+
+  function addCollection() {
+    prompt = {
+      title: t("newCollection"),
+      label: t("collectionName"),
+      initialValue: "",
+      requiredMessage: t("nameRequired"),
+      takenMessage: t("nameTaken"),
+      isTaken: (name) => sameNameSibling(collections, name),
+      onSubmit: (name) => {
+        collections = [...collections, newCollection(name)];
+        prompt = null;
+      },
+    };
+  }
+
+  function addFolder(parent) {
+    prompt = {
+      title: t("newFolder"),
+      label: t("folderName"),
+      initialValue: "",
+      requiredMessage: t("nameRequired"),
+      takenMessage: t("nameTaken"),
+      isTaken: (name) => sameNameSibling(parent.items, name),
+      onSubmit: (name) => {
+        parent.items = [...(parent.items || []), newFolder(name)];
+        prompt = null;
+      },
+    };
+  }
+
+  function addRequestTo(parent) {
+    prompt = {
+      title: t("newRequestIn"),
+      label: t("requestName"),
+      initialValue: "",
+      requiredMessage: t("nameRequired"),
+      takenMessage: t("nameTaken"),
+      isTaken: (name) => sameNameSibling(parent.items, name),
+      onSubmit: (name) => {
+        const item = newRequestItem(name);
+        parent.items = [...(parent.items || []), item];
+        prompt = null;
+        openRequest(item);
+      },
+    };
+  }
+
+  function renameNode(node) {
+    const parent = findItem(collections, node.id)?.parent;
+    prompt = {
+      title: t("rename"),
+      label:
+        node.type === "request"
+          ? t("requestName")
+          : node.type === "folder"
+            ? t("folderName")
+            : t("collectionName"),
+      initialValue: node.name,
+      requiredMessage: t("nameRequired"),
+      takenMessage: t("nameTaken"),
+      isTaken: (name) => sameNameSibling(parent ? parent.items : collections, name, node.id),
+      onSubmit: (name) => {
+        node.name = name;
+        if (node.type === "request") {
+          node.request.name = name;
+          if (node.id === current.id) current.request.name = name;
+        }
+        prompt = null;
+      },
+    };
+  }
+
+  function deleteNode(node) {
+    const labels = {
+      collection: "deleteCollection",
+      folder: "deleteFolder",
+      request: "deleteRequest",
+    };
+    const confirmKeys = {
+      collection: "deleteCollectionConfirm",
+      folder: "deleteFolderConfirm",
+      request: "deleteRequestConfirm",
+    };
+    confirmDialog = {
+      title: t(labels[node.type]),
+      message: t(confirmKeys[node.type], { name: node.name }),
+      confirmLabel: t(labels[node.type]),
+      danger: true,
+      onConfirm: () => {
+        const openInside = node.id === current.id || !!findItem([node], current.id);
+        removeItem(collections, node.id);
+        collections = [...collections];
+        if (openInside) {
+          current = { ...current, id: uid("req"), dirty: true, collectionId: null };
+        }
+        confirmDialog = null;
+      },
+    };
+  }
+
+  function duplicateNode(node) {
+    duplicateItem(collections, node.id, (name) => `${name} (copy)`);
+    collections = [...collections];
+  }
+
+  function treeMenuItems(node) {
+    if (node.type === "request") {
+      return [
+        { id: "open", label: t("newRequestIn"), icon: "send" },
+        { id: "rename", label: t("rename"), icon: "pencil" },
+        { id: "duplicate", label: t("duplicate"), icon: "copy" },
+        { separator: true, id: "sep" },
+        { id: "delete", label: t("deleteRequest"), icon: "trash", danger: true },
+      ];
+    }
+    return [
+      { id: "add-request", label: t("newRequestIn"), icon: "plus" },
+      { id: "add-folder", label: t("newFolder"), icon: "folder" },
+      { id: "rename", label: t("rename"), icon: "pencil" },
+      { id: "duplicate", label: t("duplicate"), icon: "copy" },
+      { separator: true, id: "sep" },
+      {
+        id: "delete",
+        label: node.type === "collection" ? t("deleteCollection") : t("deleteFolder"),
+        icon: "trash",
+        danger: true,
+      },
+    ];
+  }
+
+  function onTreeMenu(event, node) {
+    menu = {
+      x: event.clientX,
+      y: event.clientY,
+      items: treeMenuItems(node),
+      onSelect: (id) => {
+        if (id === "open") openRequest(node);
+        else if (id === "add-request") addRequestTo(node);
+        else if (id === "add-folder") addFolder(node);
+        else if (id === "rename") renameNode(node);
+        else if (id === "duplicate") duplicateNode(node);
+        else if (id === "delete") deleteNode(node);
+      },
+    };
+  }
+
+  function toggleNode(id) {
+    const next = new Set(expanded);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    expanded = next;
+  }
+
+  function clearHistory() {
+    confirmDialog = {
+      title: t("clearHistory"),
+      message: t("clearHistoryConfirm"),
+      confirmLabel: t("clearHistory"),
+      danger: true,
+      onConfirm: () => {
+        history = [];
+        confirmDialog = null;
+        api.clearHistory().catch((failure) => toast(failure?.message ?? String(failure)));
+      },
+    };
+  }
+
+  /* ------------------------------------------------------ URL <-> param sync */
+
+  /** Mirror the URL query into rows, keeping row ids and disabled rows intact. */
+  function syncQueryFromUrl(urlText) {
+    const { pairs } = parseUrlQuery(urlText);
+    const previous = new Map(
+      current.request.query.filter((row) => row.enabled && row.key).map((row) => [row.key, row]),
+    );
+    const rows = pairs.map((pair) => {
+      const existing = previous.get(pair.key);
+      return existing ? { ...existing, value: pair.value } : newRow(pair.key, pair.value);
+    });
+    current.request.query = [...rows, ...current.request.query.filter((row) => !row.enabled)];
+  }
+
+  function syncUrlFromQuery() {
+    const pairs = current.request.query
+      .filter((row) => row.enabled && String(row.key || "").trim())
+      .map((row) => ({ key: row.key, value: row.value }));
+    current.request.url = rebuildUrlQuery(current.request.url, pairs);
+  }
+
+  function touch() {
+    current.dirty = true;
+    sendIssues = {};
+  }
+
+  function onUrlInput(value) {
+    current.request.url = value;
+    syncQueryFromUrl(value);
+    touch();
+  }
+
+  function onQueryChange() {
+    syncUrlFromQuery();
+    touch();
+  }
+
+  /* -------------------------------------------------------------- send flow */
+
+  let sendSequence = 0;
+
+  function send(confirmed = false) {
+    if (sending) return;
+    const environment = selectedEnv;
+    if (
+      !confirmed &&
+      environment?.prodLike &&
+      environment.confirmUnsafe !== false &&
+      UNSAFE_METHODS.includes(current.request.method)
+    ) {
+      pendingSend = true;
+      return;
+    }
+
+    const scope = variableScope(environment, current.request);
+    const requestId = uid("call");
+    const { spec, issues } = buildSendSpec(current.request, requestId, scope, {
+      previewCapBytes: settings.previewCapBytes,
+    });
+    if (Object.keys(issues).length) {
+      sendIssues = issues;
+      announceAssertive(t("notSentYet"));
+      activeTab = issues.url
+        ? "params"
+        : issues.auth
+          ? "auth"
+          : issues.body
+            ? "body"
+            : issues.headers
+              ? "headers"
+              : activeTab;
+      return;
+    }
+
+    sendIssues = {};
+    outcome = null;
+    sending = requestId;
+    const token = ++sendSequence;
+    const requestKey = current.id;
+
+    api
+      .sendRequest(spec)
+      .then((result) => {
+        // A newer send owns the pane now; dropping a superseded result keeps a
+        // slow response from overwriting a fresh one.
+        if (token !== sendSequence) return;
+        if (result?.cancelled) {
+          outcome = { kind: "cancelled" };
+          announcePolite(t("announceCancelled"));
+        } else {
+          const normalized = normalizeResponse(result);
+          responses = { ...responses, [requestKey]: normalized };
+          receivedAt = { ...receivedAt, [requestKey]: Date.now() };
+          outcome = { kind: "ok" };
+          announcePolite(t("announceSent", { status: normalized.status }));
+        }
+      })
+      .catch((failure) => {
+        if (token !== sendSequence) return;
+        const category = failure?.category || "INTERNAL_ERROR";
+        outcome = { kind: "error", category, message: failure?.message ?? String(failure) };
+        announceAssertive(t("announceFailed", { category }));
+      })
+      .finally(() => {
+        if (token === sendSequence) sending = "";
+        recordHistory(requestKey);
+      });
+  }
+
+  async function cancel() {
+    if (!sending) return;
+    try {
+      await api.cancelRequest(sending);
+    } catch (failure) {
+      toast(failure?.message ?? String(failure));
+    }
+  }
+
+  /** History keeps a redacted snapshot: no body text and no credentials. */
+  function recordHistory(requestKey) {
+    const snapshot = redactRequestForHistory(current.request);
+    const entry = historyEntry({
+      request: snapshot,
+      response: responses[requestKey] ?? null,
+      error: outcome?.kind === "error" ? { category: outcome.category } : null,
+    });
+    history = [entry, ...history].slice(0, 500);
+    historyActiveId = entry.id;
+    api.appendHistory(entry).catch((failure) => toast(failure?.message ?? String(failure)));
+  }
+
+  async function copyCurl() {
+    const scope = variableScope(selectedEnv, current.request);
+    const { spec, issues } = buildSendSpec(current.request, uid("curl"), scope, {
+      maskSecrets: true,
+      previewCapBytes: settings.previewCapBytes,
+    });
+    if (issues.url?.invalid) {
+      toast(t("invalidUrl"));
+      return;
+    }
+    try {
+      const command = await api.exportCurl(spec);
+      await copyToClipboard(command, t("copied"));
+    } catch (failure) {
+      toast(failure?.message ?? String(failure));
+    }
+  }
+
+  function formatBody() {
+    try {
+      current.request.body.text = JSON.stringify(JSON.parse(current.request.body.text), null, 2);
+      current.request.body.type = "json";
+      touch();
+    } catch {
+      toast(t("jsonInvalid"));
+    }
+  }
+
+  function promoteToEnvironment(node) {
+    const environment = selectedEnv;
+    if (!environment) {
+      toast(t("noEnvSelected"));
+      return;
+    }
+    const name = String(node.key ?? "value");
+    const text = valueAsText(node.value);
+    const existing = environment.variables.find((variable) => variable.key === name);
+    if (existing) existing.value = text;
+    else environment.variables = [...environment.variables, { ...newRow(name, text), secret: true }];
+    toast(t("envVarSet", { name, env: environment.name }));
+  }
+
+  /* ----------------------------------------------------------------- overlays */
+
+  function commandMenu(event) {
+    menu = {
+      x: event.clientX,
+      y: event.clientY,
+      items: [
+        { id: "curl", label: t("copyAsCurl"), icon: "copy" },
+        { id: "save", label: t("save"), icon: "save", disabled: !current.dirty },
+      ],
+      onSelect: (id) => (id === "curl" ? copyCurl() : saveCurrent()),
+    };
+  }
+
+  function finishGuard(action) {
+    const pending = pendingAction;
+    pendingAction = null;
+    if (action === "save") saveCurrent();
+    if (action !== "cancel") pending?.();
+  }
+
+  function addEnvironment(name) {
+    const environment = newEnvironment(name);
+    environments = [...environments, environment];
+    settings.selectedEnvId = environment.id;
+    return environment;
+  }
+
+  function deleteEnvironment(environment) {
+    confirmDialog = {
+      title: t("deleteEnv"),
+      message: t("deleteEnvConfirm", { name: environment.name }),
+      confirmLabel: t("deleteEnv"),
+      danger: true,
+      onConfirm: () => {
+        environments = environments.filter((item) => item.id !== environment.id);
+        if (settings.selectedEnvId === environment.id) settings.selectedEnvId = null;
+        confirmDialog = null;
+      },
+    };
+  }
+
+  /* ---------------------------------------------------------------- shortcuts */
+
+  function onKeyDown(event) {
+    const modifier = event.ctrlKey || event.metaKey;
+    const plain = modifier && !event.shiftKey && !event.altKey;
+    const key = event.key.toLowerCase();
+
+    if (plain && event.key === "Enter") {
+      event.preventDefault();
+      if (sending) cancel();
+      else send();
+      return;
+    }
+    if (plain && key === "s") {
+      event.preventDefault();
+      saveCurrent();
+      return;
+    }
+    if (plain && key === "n") {
+      event.preventDefault();
+      newRequest();
+      return;
+    }
+    if (plain && key === "l") {
+      event.preventDefault();
+      const input = document.querySelector(".url-input");
+      input?.focus();
+      input?.select?.();
+      return;
+    }
+    if (event.shiftKey && event.altKey && key === "f") {
+      event.preventDefault();
+      formatBody();
+    }
+  }
+
+  /* -------------------------------------------------------------- lifecycle */
+
+  function seedWorkspace() {
+    const request = defaultRequest();
+    request.name = "Sample GET";
+    request.url = "https://httpbin.org/get";
+    request.headers = [newRow("Accept", "application/json")];
+    const item = { id: uid("req"), type: "request", name: request.name, request };
+    collections = [{ ...newCollection("My Collection"), items: [item] }];
+    return item;
+  }
+
+  /** First stored request at any depth — collections may hold only folders. */
+  function firstStoredRequest() {
+    const walk = (items) => {
+      for (const item of items) {
+        if (item.type === "request") return item;
+        const found = item.items ? walk(item.items) : null;
+        if (found) return found;
+      }
+      return null;
+    };
+    for (const collection of collections) {
+      const found = walk(collection.items || []);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  /** Open something usable without ever overwriting stored data. */
+  function openInitialRequest() {
+    const stored = collections.length ? firstStoredRequest() : seedWorkspace();
+    if (stored) {
+      current = {
+        id: stored.id,
+        request: deepClone(stored.request),
+        dirty: false,
+        bodyRedacted: false,
+        collectionId: findCollectionOf(collections, stored.id)?.id ?? null,
+      };
+      return;
+    }
+    // Collections exist but hold no request yet: start an unsaved draft.
+    const request = defaultRequest();
+    request.name = t("draftName");
+    current = {
+      id: uid("req"),
+      request,
+      dirty: true,
+      bodyRedacted: false,
+      collectionId: collections[0]?.id ?? null,
+    };
+  }
+
+  onMount(async () => {
+    try {
+      await window.dbxPlugin.ready;
+      locale = normalizeLocale(window.dbxPlugin.locale);
+      appearance = window.dbxPlugin.theme?.appearance === "dark" ? "dark" : "light";
+    } catch (failure) {
+      loadError = failure?.message ?? String(failure);
+    }
+
+    try {
+      const stored = await api.loadPersistedState();
+      const migrated = migrateState(stored.state);
+      collections = migrated.collections;
+      environments = migrated.environments;
+      settings = migrated.settings;
+      history = migrateHistory(stored.history);
+      loaded = true;
+    } catch (failure) {
+      // Never strand the workbench on the loading screen. Fall back to an empty
+      // workspace and leave persistence off so nothing overwrites stored data.
+      loadError = `${t("loadFailed")} ${failure?.message ?? String(failure)}`;
+    }
+
+    openInitialRequest();
+    expanded = new Set(collections.map((collection) => collection.id));
+    ready = true;
+  });
+
+  $effect(() => {
+    const onEnvironmentChange = () => {
+      locale = normalizeLocale(window.dbxPlugin.locale);
+      appearance = window.dbxPlugin.theme?.appearance === "dark" ? "dark" : "light";
+    };
+    window.addEventListener("dbx-plugin-env", onEnvironmentChange);
+    return () => window.removeEventListener("dbx-plugin-env", onEnvironmentChange);
+  });
 </script>
 
-<svelte:window on:keydown={onShortcut} />
-{#if ready}<button class="floating-folder" on:click={addFolder} aria-label={t("Add folder", "添加文件夹")}>＋ {t("Folder", "文件夹")}</button>{/if}
-{#if !ready}<main class="boot">{t("Loading API Studio…", "正在加载 API Studio…")}</main>{:else}
-<main class="app" data-theme={appearance}>
-  <aside class="sidebar"><div class="brand"><span class="brand-icon">↗</span><div><strong>API Studio</strong><small>{t("Build and debug API requests", "构建、调试和管理 API 请求")}</small></div></div><div class="sidebar-actions"><button class="btn primary" on:click={newRequest}>＋ {t("New request", "新建请求")}</button><button class="btn" on:click={() => { collections = [...collections, { id: uid("col"), type: "collection", name: t("Collection", "集合"), items: [] }]; scheduleSave(); }}>＋ {t("Collection", "集合")}</button></div><input class="input search" bind:value={search} placeholder={t("Search requests (name, URL, method)", "搜索请求（名称、URL、方法）")} aria-label={t("Search requests", "搜索请求")} /><div class="section-title">▱ {t("Collections", "集合")}</div><div class="tree">{#each visibleCollections as collection}<div class="tree-row collection">▱ <strong>{collection.name}</strong><span class="count">{collection.items?.length || 0}</span></div>{#each collection.items || [] as item}{#if item.type === "folder"}<div class="tree-row folder">▰ {item.name}</div>{#each item.items || [] as nested}<button class="tree-row request nested" class:active={nested.id === current.id} on:click={() => openItem(nested)}><span class="method method--{nested.request?.method}">{nested.request?.method}</span>{nested.name}</button>{/each}{:else}<button class="tree-row request" class:active={item.id === current.id} on:click={() => openItem(item)}><span class="method method--{item.request?.method}">{item.request?.method}</span>{item.name}</button>{/if}{/each}{/each}</div><div class="section-title history-title">◷ {t("History", "历史")} <span class="count">{history.length}</span><button class="link" on:click={() => { history = []; window.dbxPlugin.invoke("api/persistence/history-clear", {}); }}>{t("Clear", "清空")}</button></div><div class="history">{#each history.slice(0, 30) as entry}<button class="history-row" on:click={() => guard(() => { current = { id: uid("req"), request: clone(entry.request), dirty: true, bodyRedacted: true }; })}><span class="method method--{entry.method}">{entry.method}</span><span>{entry.url}</span><small>{entry.status || "—"}</small></button>{/each}</div></aside>
-  <section class="workspace"><header class="header"><div class="crumb">⌂ <strong>{current.request.name}</strong>{#if current.dirty}<b>*</b>{/if}<button class="icon-btn" on:click={copyCurl} aria-label="Copy cURL">⧉</button></div><div class="header-tools"><select class="select" class:prod={selectedEnv?.prodLike} bind:value={selectedEnvId} aria-label={t("Environment", "环境")}><option value="">{t("No environment", "无环境")}</option>{#each environments as item}<option value={item.id}>{item.prodLike ? "⚠ " : ""}{item.name}</option>{/each}</select><button class="btn" on:click={() => modal = "environment"}>⚙ {t("Environments", "环境管理")}</button></div></header><div class="command-row"><select class="select method-select method--{current.request.method}" bind:value={current.request.method} on:change={() => edit(() => {})} aria-label="HTTP method">{#each methods as method}<option>{method}</option>{/each}</select><input class="url-input mono" bind:value={current.request.url} on:input={syncQueryFromUrl} placeholder="https://api.example.com/v1/users/{{userId}}" aria-label={t("Request URL", "请求 URL")} /><button class="btn primary send" on:click={() => sending ? cancel() : send()}>{sending ? t("Cancel", "取消") : "➤ " + t("Send", "发送")}</button><button class="btn" disabled={!current.dirty} on:click={saveCurrent}>▣ {t("Save", "保存")}</button></div><nav class="tabs">{#each tabs as item}<button class:active={activeTab === item} on:click={() => activeTab = item}>{t(item, item === "params" ? "参数" : item === "headers" ? "请求头" : item === "auth" ? "认证" : item === "body" ? "请求体" : "设置")}</button>{/each}</nav><div class="editor">{#if error}<div class="alert" role="alert">{error}</div>{/if}{#if activeTab === "params"}<KeyValueEditor rows={current.request.query} addLabel={t("Add parameter", "添加参数")} onChange={syncUrlFromQuery} onAdd={() => addRow(current.request.query)} onRemove={(item) => removeRow(current.request.query, item)} />{:else if activeTab === "headers"}<KeyValueEditor rows={current.request.headers} addLabel={t("Add header", "添加请求头")} secretKeys onChange={() => edit(() => {})} onAdd={() => addRow(current.request.headers)} onRemove={(item) => removeRow(current.request.headers, item)} />{:else if activeTab === "auth"}<div class="auth"><nav class="auth-nav">{#each [["none", "No Auth"], ["bearer", "Bearer Token"], ["basic", "Basic Auth"], ["apikey", "API Key"]] as item}<button class:active={current.request.auth.type === item[0]} on:click={() => edit((r) => r.auth = { type: item[0] })}>{item[1]}</button>{/each}</nav><div class="auth-form"><h2>{current.request.auth.type}</h2>{#if current.request.auth.type === "bearer"}<label>Token<input class="input mono" type="password" bind:value={current.request.auth.token} on:input={() => edit(() => {})} /></label>{:else if current.request.auth.type === "basic"}<label>Username<input class="input" bind:value={current.request.auth.username} on:input={() => edit(() => {})} /></label><label>Password<input class="input mono" type="password" bind:value={current.request.auth.password} on:input={() => edit(() => {})} /></label>{:else if current.request.auth.type === "apikey"}<label>Key<input class="input mono" bind:value={current.request.auth.keyName} on:input={() => edit(() => {})} /></label><label>Value<input class="input mono" type="password" bind:value={current.request.auth.keyValue} on:input={() => edit(() => {})} /></label><label>Add to<select class="select" bind:value={current.request.auth.in} on:change={() => edit(() => {})}><option value="header">Header</option><option value="query">Query</option></select></label>{/if}<p class="hint">{t("Secrets are session-only. Use {{variable}} references for persistence.", "机密值仅在本会话保留；使用 {{变量}} 引用可持久化。")}</p></div></div>{:else if activeTab === "body"}<div class="body-toolbar"><label>{t("Body type", "请求体类型")}<select class="select" bind:value={current.request.body.type} on:change={() => edit(() => {})}><option value="none">None</option><option value="json">JSON</option><option value="text">Text</option><option value="urlencoded">x-www-form-urlencoded</option></select></label>{#if current.request.body.type === "json"}<button class="btn" on:click={() => formatBody(true)}>Format</button><button class="btn" on:click={() => formatBody(false)}>Minify</button>{/if}</div>{#if current.request.body.type !== "none"}<textarea class="body-editor mono" bind:value={current.request.body.text} on:input={() => edit(() => {})} spellcheck="false" aria-label={t("Request body", "请求体")}></textarea>{/if}{:else}<div class="settings"><label>{t("Timeout (ms)", "超时（毫秒）")}<input class="input" type="number" bind:value={current.request.settings.timeoutMs} on:change={() => edit(() => {})} /></label><label class="check"><input type="checkbox" bind:checked={current.request.settings.followRedirects} on:change={() => edit(() => {})} /> {t("Follow redirects", "跟随重定向")}</label><label class="check"><input type="checkbox" bind:checked={current.request.settings.verifyTls} on:change={() => edit(() => {})} /> {t("Verify TLS certificate", "验证 TLS 证书")}</label></div>{/if}</div><div class="splitter" role="separator" aria-label={t("Resize response area", "调整响应区域")}></div><section class="response"><header class="response-header"><nav class="tabs">{#each responseTabs as item}<button class:active={responseTab === item} on:click={() => responseTab = item}>{t(item, item === "body" ? "响应体" : item === "headers" ? "响应头" : "耗时")}</button>{/each}</nav>{#if response}<span class="meta">● {response.status} {response.statusText} · {response.timing.totalMs ?? "—"} ms · {(response.body.sizeBytes / 1024).toFixed(2)} KB</span>{/if}</header>{#if sending}<div class="sending" role="status">◌ {t("Sending new request…", "正在发送新请求…")}</div>{:else if outcome?.kind === "cancelled"}<div class="empty">{t("Request cancelled", "请求已取消")}</div>{:else if !response}<div class="empty">{t("Send a request to inspect the response", "发送请求后可查看响应")}</div>{:else if responseTab === "body"}<div class="response-body"><div class="response-toolbar"><button class="btn" on:click={() => copy(response.body.text || response.body.base64 || "")}>⧉ {t("Copy", "复制")}</button><button class="btn" disabled={!parsedResponse} on:click={() => responseView = responseView === "tree" ? "text" : "tree"}>{t("Tree", "树状")}</button></div>{#if responseView === "tree" && parsedResponse !== null}<JsonTree value={parsedResponse} onCopy={copy} />{:else}<pre class="json mono">{response.body.text || response.body.base64 || ""}</pre>{/if}</div>{:else if responseTab === "headers"}<div class="response-headers">{#each response.headers as header}<div><span class="mono header-name">{header.key}</span><span class="mono">{header.value}</span></div>{/each}</div>{:else}<div class="timing"><p>Total <b>{response.timing.totalMs ?? "—"} ms</b></p><p>TTFB <b>{response.timing.ttfbMs ?? "—"} ms</b></p><p>Download <b>{response.timing.downloadMs ?? "—"} ms</b></p></div>{/if}</section></section>
-</main>{/if}
-{#if modal === "environment"}<EnvironmentDialog environments={environments} selectedId={selectedEnvId} onClose={() => modal = null} onChange={() => { environments = [...environments]; scheduleSave(); }} onAdd={addEnvironment} />{:else if modal === "unsaved"}<div class="backdrop"><section class="modal" role="dialog" aria-modal="true"><h2>{t("Unsaved changes", "有未保存的修改")}</h2><p>{t("Save this request before continuing?", "继续前是否保存当前请求？")}</p><div class="modal-actions"><button class="btn" on:click={() => finishModal("cancel")}>{t("Cancel", "取消")}</button><button class="btn" on:click={() => finishModal("discard")}>{t("Discard", "放弃")}</button><button class="btn primary" on:click={() => finishModal("save")}>{t("Save", "保存")}</button></div></section></div>{:else if modal === "production"}<div class="backdrop"><section class="modal" role="dialog" aria-modal="true"><h2>{t("Production environment", "生产环境")}</h2><p>{t("This request can modify production data. Send anyway?", "此请求可能修改生产数据，仍要发送吗？")}</p><div class="modal-actions"><button class="btn" on:click={() => finishModal("cancel")}>{t("Cancel", "取消")}</button><button class="btn primary" on:click={() => { const action = pending; pending = null; modal = null; action?.(); }}>{t("Send anyway", "仍然发送")}</button></div></section></div>{/if}
+<svelte:window onkeydown={onKeyDown} />
+
+<div class="visually-hidden" aria-live="assertive" aria-atomic="true">{assertive}</div>
+<div class="visually-hidden" aria-live="polite" aria-atomic="true">{polite}</div>
+
+{#if !ready}
+  <main class="boot">
+    <Icon name="clock" size={20} />
+    <p>{t("booting")}</p>
+  </main>
+{:else}
+  <div
+    class="app"
+    class:app--sidebar-collapsed={settings.ui.sidebarCollapsed}
+    data-theme={appearance}
+    style={`--sidebar-w:${settings.ui.sidebarWidth}px; --editor-h:${settings.ui.editorH}%`}
+  >
+    {#if !settings.ui.sidebarCollapsed}
+      <Sidebar
+        {collections}
+        {visibleCollections}
+        {history}
+        activeRequestId={current.id}
+        {historyActiveId}
+        {search}
+        historyOpen={settings.ui.historyOpen}
+        {expanded}
+        {t}
+        onSearch={(value) => (search = value)}
+        onToggleNode={toggleNode}
+        onToggleHistory={() => (settings.ui.historyOpen = !settings.ui.historyOpen)}
+        onToggleSidebar={() => (settings.ui.sidebarCollapsed = true)}
+        onOpenRequest={openRequest}
+        onOpenHistory={openHistory}
+        onNodeMenu={onTreeMenu}
+        onNewRequest={newRequest}
+        onNewCollection={addCollection}
+        onClearHistory={clearHistory}
+      />
+      <Splitter
+        axis="x"
+        value={settings.ui.sidebarWidth}
+        min={220}
+        max={440}
+        label={t("collapseSidebar")}
+        onChange={(value) => (settings.ui.sidebarWidth = value)}
+      />
+    {/if}
+
+    <section class="workspace">
+      <HeaderBar
+        requestName={current.request.name}
+        dirty={current.dirty}
+        path={currentPath}
+        {environments}
+        {selectedEnv}
+        sidebarCollapsed={settings.ui.sidebarCollapsed}
+        {t}
+        onSelectEnv={(id) => (settings.selectedEnvId = id || null)}
+        onManageEnvironments={() => (envOpen = true)}
+        onRename={() => {
+          const found = findItem(collections, current.id);
+          if (found) renameNode(found.item);
+        }}
+        onToggleSidebar={() => (settings.ui.sidebarCollapsed = false)}
+      />
+
+      <CommandRow
+        request={current.request}
+        sending={!!sending}
+        dirty={current.dirty}
+        tlsDisabled={current.request.settings.verifyTls === false}
+        {t}
+        onUrlInput={onUrlInput}
+        onMethodChange={(method) => {
+          current.request.method = method;
+          touch();
+        }}
+        onSend={() => send()}
+        onCancel={cancel}
+        onSave={saveCurrent}
+        onMore={commandMenu}
+      />
+
+      <RequestTabs
+        request={current.request}
+        {activeTab}
+        issues={sendIssues}
+        previewCapBytes={settings.previewCapBytes}
+        {t}
+        onChange={activeTab === "params" ? onQueryChange : touch}
+        onActiveTab={(id) => (activeTab = id)}
+        onOpenEnvironments={() => (envOpen = true)}
+        onPreviewCapChange={(value) => (settings.previewCapBytes = value)}
+      />
+
+      <Splitter
+        axis="y"
+        value={settings.ui.editorH}
+        min={20}
+        max={80}
+        unit="%"
+        label={t("responseOf")}
+        onChange={(value) => (settings.ui.editorH = value)}
+      />
+
+      <ResponsePane
+        {response}
+        sending={!!sending}
+        {error}
+        {cancelled}
+        receivedAt={receivedAt[current.id] ?? null}
+        truncatedLimit={settings.previewCapBytes}
+        {t}
+        onRetry={() => send()}
+        onCopyText={(text) => copyToClipboard(text)}
+        onPromoteToEnv={promoteToEnvironment}
+      />
+
+      {#if loadError}
+        <p class="notice notice--warning app__notice" role="alert">
+          <Icon name="alert" />
+          <span>{loadError}</span>
+          <button type="button" class="link-btn" onclick={() => (loadError = "")}>
+            {t("dismiss")}
+          </button>
+        </p>
+      {/if}
+    </section>
+  </div>
+{/if}
+
+{#if menu}
+  <Menu
+    x={menu.x}
+    y={menu.y}
+    items={menu.items}
+    onClose={() => (menu = null)}
+    onSelect={(id) => menu.onSelect(id)}
+  />
+{/if}
+
+{#if prompt}
+  <PromptDialog
+    title={prompt.title}
+    label={prompt.label}
+    initialValue={prompt.initialValue}
+    requiredMessage={prompt.requiredMessage}
+    takenMessage={prompt.takenMessage}
+    isTaken={prompt.isTaken}
+    submitLabel={t("save")}
+    cancelLabel={t("keepEditing")}
+    onSubmit={prompt.onSubmit}
+    onCancel={() => (prompt = null)}
+  />
+{/if}
+
+{#if confirmDialog}
+  <ConfirmDialog
+    title={confirmDialog.title}
+    message={confirmDialog.message}
+    confirmLabel={confirmDialog.confirmLabel}
+    cancelLabel={t("cancel")}
+    danger={confirmDialog.danger}
+    onConfirm={confirmDialog.onConfirm}
+    onCancel={() => (confirmDialog = null)}
+  />
+{/if}
+
+{#if pendingSend}
+  <Modal
+    title={t("prodBadge")}
+    titleId="production-title"
+    onClose={() => (pendingSend = false)}
+    width="min(460px, calc(100vw - 32px))"
+  >
+    <p class="modal__text">
+      {t("confirmSendUnsafe", { env: selectedEnv?.name ?? "", method: current.request.method })}
+    </p>
+    {#snippet footer()}
+      <button type="button" class="btn" data-initial-focus onclick={() => (pendingSend = false)}>
+        {t("cancel")}
+      </button>
+      <button
+        type="button"
+        class="btn btn--danger"
+        onclick={() => {
+          pendingSend = false;
+          send(true);
+        }}
+      >
+        {t("sendAnyway")}
+      </button>
+    {/snippet}
+  </Modal>
+{/if}
+
+{#if pendingAction}
+  <Modal
+    title={t("unsavedTitle")}
+    titleId="unsaved-title"
+    dismissable={false}
+    onClose={() => finishGuard("cancel")}
+    width="min(440px, calc(100vw - 32px))"
+  >
+    <p class="modal__text">{t("unsavedMessage")}</p>
+    {#snippet footer()}
+      <button type="button" class="btn" data-initial-focus onclick={() => finishGuard("cancel")}>
+        {t("keepEditing")}
+      </button>
+      <button type="button" class="btn" onclick={() => finishGuard("discard")}>{t("discard")}</button>
+      <button type="button" class="btn btn--primary" onclick={() => finishGuard("save")}>
+        {t("saveChanges")}
+      </button>
+    {/snippet}
+  </Modal>
+{/if}
+
+{#if envOpen}
+  <EnvironmentDialog
+    {environments}
+    selectedId={settings.selectedEnvId ?? ""}
+    {t}
+    onClose={() => (envOpen = false)}
+    onChange={touch}
+    onAdd={addEnvironment}
+    onDelete={deleteEnvironment}
+  />
+{/if}
+
+<Toasts {toasts} />
