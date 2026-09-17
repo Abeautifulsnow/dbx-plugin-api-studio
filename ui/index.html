@@ -1,56 +1,5404 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>API Studio</title>
-    <style>
-      :root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
-      * { box-sizing: border-box; }
-      body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 32px; background: radial-gradient(circle at top left, rgba(109,93,252,.2), transparent 40%), Canvas; color: CanvasText; }
-      main { width: min(680px, 100%); padding: 32px; border: 1px solid color-mix(in srgb, CanvasText 16%, transparent); border-radius: 20px; background: color-mix(in srgb, Canvas 92%, transparent); box-shadow: 0 24px 80px rgba(0,0,0,.12); }
-      .eyebrow { color: #6d5dfc; font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
-      h1 { margin: 10px 0; font-size: clamp(28px, 5vw, 46px); }
-      p { line-height: 1.65; opacity: .74; }
-      button { margin-top: 20px; border: 0; border-radius: 12px; padding: 12px 18px; background: #6d5dfc; color: white; font: inherit; font-weight: 650; cursor: pointer; }
-      button:disabled { opacity: .55; cursor: wait; }
-      pre { margin-top: 20px; min-height: 92px; overflow: auto; padding: 16px; border-radius: 12px; background: color-mix(in srgb, CanvasText 7%, transparent); }
-    </style>
-  </head>
-  <body>
-    <main>
-      <div class="eyebrow" id="eyebrow">DBX plugin workbench</div>
-      <h1>API Studio</h1>
-      <p id="description">This sandboxed page talks to the Rust sidecar only through the DBX Host Bridge.</p>
-      <button id="ping" type="button">Invoke sidecar</button>
-      <pre id="result">Waiting for DBX plugin host…</pre>
-    </main>
-    <script>
-      const result = document.querySelector("#result");
-      const button = document.querySelector("#ping");
-      const copy = {
-        en: { eyebrow: "DBX plugin workbench", description: "This sandboxed page talks to the Rust sidecar only through the DBX Host Bridge.", button: "Invoke sidecar", ready: "Ready", calling: "Calling sidecar…", error: "Error" },
-        zh: { eyebrow: "DBX 插件工作台", description: "此沙箱页面仅通过 DBX Host Bridge 与 Rust Sidecar 通信。", button: "调用 Sidecar", ready: "已就绪", calling: "正在调用 Sidecar…", error: "错误" }
-      };
-      let text = copy.en;
-      window.dbxPlugin.ready.then(() => {
-        text = window.dbxPlugin.locale.toLowerCase().startsWith("zh") ? copy.zh : copy.en;
-        document.querySelector("#eyebrow").textContent = text.eyebrow;
-        document.querySelector("#description").textContent = text.description;
-        button.textContent = text.button;
-        result.textContent = text.ready;
-      });
-      button.addEventListener("click", async () => {
-        button.disabled = true;
-        result.textContent = text.calling;
-        try {
-          result.textContent = JSON.stringify(await window.dbxPlugin.invoke("dbx-plugin-api-studio/ping", { connectionId: window.dbxPlugin.context?.connectionId }), null, 2);
-        } catch (error) {
-          result.textContent = `${text.error}: ${error.message}`;
-        } finally {
-          button.disabled = false;
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>API Studio</title>
+<style>
+/* ============================================================
+   DBX API Studio — workbench styles.
+   Only DBX semantic tokens are consumed, each with an accessible
+   local fallback so the UI also renders in the dev host. Fallbacks
+   switch with body[data-fallback="dark"] when the host reports a
+   dark appearance.
+   ============================================================ */
+
+:root {
+  --api-bg: var(--color-background, #ffffff);
+  --api-surface: var(--color-card, #ffffff);
+  --api-surface-2: var(--color-muted, #f6f7f9);
+  --api-fg: var(--color-foreground, #18181b);
+  --api-muted: var(--color-muted-foreground, #5f6b7a);
+  --api-border: var(--color-border, #e2e8f0);
+  --api-primary: var(--color-primary, #16794a);
+  --api-primary-fg: var(--color-primary-foreground, #ffffff);
+  --api-danger: var(--color-destructive, #dc2626);
+  --api-warning: var(--color-warning, #b45309);
+  --api-info: var(--color-info, #1d4ed8);
+  --api-focus: var(--color-focus, #16794a);
+  --api-radius: var(--radius, 8px);
+  --api-radius-sm: calc(var(--radius, 8px) / 2);
+  --api-font: var(--font-sans, -apple-system, "Segoe UI", system-ui, sans-serif);
+  --api-mono: var(--font-mono, ui-monospace, "Cascadia Code", Consolas, monospace);
+  /* JSON syntax colors: checked for 4.5:1 on both light and dark surfaces. */
+  --api-json-key: var(--color-json-key, #7c2d92);
+  --api-json-string: var(--color-json-string, #16794a);
+  --api-json-number: var(--color-json-number, #1d4ed8);
+  --api-json-literal: var(--color-json-literal, #b45309);
+  --api-header-h: 44px;
+}
+
+body[data-fallback="dark"] {
+  --api-bg: var(--color-background, #141618);
+  --api-surface: var(--color-card, #1d2023);
+  --api-surface-2: var(--color-muted, #26292d);
+  --api-fg: var(--color-foreground, #e6e8ea);
+  --api-muted: var(--color-muted-foreground, #9aa3ad);
+  --api-border: var(--color-border, #3a3f45);
+  --api-primary: var(--color-primary, #34c983);
+  --api-primary-fg: var(--color-primary-foreground, #06210f);
+  --api-danger: var(--color-destructive, #f87171);
+  --api-warning: var(--color-warning, #fbbf24);
+  --api-info: var(--color-info, #93b4ff);
+  --api-focus: var(--color-focus, #34c983);
+  --api-json-key: var(--color-json-key, #d8b4fe);
+  --api-json-string: var(--color-json-string, #6ee7a0);
+  --api-json-number: var(--color-json-number, #93b4ff);
+  --api-json-literal: var(--color-json-literal, #fbbf24);
+}
+
+* { box-sizing: border-box; }
+
+/* Author display rules elsewhere must never resurrect hidden elements. */
+[hidden] { display: none !important; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--api-font);
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--api-fg);
+  background: var(--api-bg);
+  overflow: hidden;
+}
+
+button, input, select, textarea {
+  font: inherit;
+  color: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--api-focus);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
+.mono { font-family: var(--api-mono); }
+.visually-hidden {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ---------- App layout ---------- */
+
+.app {
+  display: grid;
+  grid-template-columns: var(--sidebar-w, 288px) 4px 1fr;
+  height: 100%;
+}
+
+.app[hidden] { display: none; }
+
+.main-col {
+  display: grid;
+  grid-template-rows: var(--api-header-h) minmax(0, var(--editor-h, 46%)) 4px minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+
+/* ---------- Generic controls ---------- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--api-border);
+  border-radius: var(--api-radius-sm);
+  background: var(--api-surface);
+  color: var(--api-fg);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+.btn:hover:not(:disabled) { background: var(--api-surface-2); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.btn--primary {
+  background: var(--api-primary);
+  border-color: var(--api-primary);
+  color: var(--api-primary-fg);
+  font-weight: 600;
+}
+.btn--primary:hover:not(:disabled) { filter: brightness(1.05); background: var(--api-primary); }
+
+.btn--danger { color: var(--api-danger); border-color: var(--api-danger); background: transparent; }
+.btn--danger:hover:not(:disabled) { background: color-mix(in srgb, var(--api-danger) 10%, transparent); }
+
+.btn--ghost { border-color: transparent; background: transparent; }
+.btn--ghost:hover:not(:disabled) { background: var(--api-surface-2); }
+
+.btn--sm { height: 26px; padding: 0 8px; font-size: 12px; }
+
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 32px;
+  border: none;
+  border-radius: var(--api-radius-sm);
+  background: transparent;
+  color: var(--api-muted);
+  cursor: pointer;
+}
+.icon-btn:hover:not(:disabled) { background: var(--api-surface-2); color: var(--api-fg); }
+.icon-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.input, .select {
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--api-border);
+  border-radius: var(--api-radius-sm);
+  background: var(--api-surface);
+  color: var(--api-fg);
+  min-width: 0;
+}
+.input::placeholder { color: var(--api-muted); }
+.input:focus, .select:focus, .textarea:focus {
+  outline: 2px solid var(--api-focus);
+  outline-offset: -1px;
+}
+.textarea {
+  padding: 8px;
+  border: 1px solid var(--api-border);
+  border-radius: var(--api-radius-sm);
+  background: var(--api-surface);
+  color: var(--api-fg);
+  resize: none;
+}
+.input--error, .textarea--error { border-color: var(--api-danger); }
+
+.checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.checkbox input { accent-color: var(--api-primary); width: 14px; height: 14px; }
+
+/* ---------- Badges & chips ---------- */
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.badge--prod {
+  background: color-mix(in srgb, var(--api-danger) 14%, transparent);
+  color: var(--api-danger);
+  border: 1px solid color-mix(in srgb, var(--api-danger) 45%, transparent);
+}
+.badge--warn {
+  background: color-mix(in srgb, var(--api-warning) 14%, transparent);
+  color: var(--api-warning);
+  border: 1px solid color-mix(in srgb, var(--api-warning) 45%, transparent);
+}
+
+.method {
+  display: inline-block;
+  min-width: 46px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-family: var(--api-mono);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  border: 1px solid transparent;
+}
+.method--GET  { color: #15803d; background: color-mix(in srgb, #22c55e 15%, transparent); border-color: color-mix(in srgb, #22c55e 40%, transparent); }
+.method--POST { color: #b45309; background: color-mix(in srgb, #f97316 15%, transparent); border-color: color-mix(in srgb, #f97316 40%, transparent); }
+.method--PUT  { color: #1d4ed8; background: color-mix(in srgb, #3b82f6 15%, transparent); border-color: color-mix(in srgb, #3b82f6 40%, transparent); }
+.method--PATCH{ color: #7c2d92; background: color-mix(in srgb, #a855f7 15%, transparent); border-color: color-mix(in srgb, #a855f7 40%, transparent); }
+.method--DELETE { color: #b91c1c; background: color-mix(in srgb, #ef4444 15%, transparent); border-color: color-mix(in srgb, #ef4444 40%, transparent); }
+body[data-fallback="dark"] .method--GET  { color: #4ade80; }
+body[data-fallback="dark"] .method--POST { color: #fb923c; }
+body[data-fallback="dark"] .method--PUT  { color: #60a5fa; }
+body[data-fallback="dark"] .method--PATCH{ color: #c084fc; }
+body[data-fallback="dark"] .method--DELETE { color: #f87171; }
+
+.status-dot {
+  display: inline-block;
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  flex: none;
+}
+.status-dot--2xx { background: #16a34a; }
+.status-dot--3xx { background: #2563eb; }
+.status-dot--4xx { background: #ea580c; }
+.status-dot--5xx { background: #dc2626; }
+.status-dot--err { background: var(--api-danger); }
+.status-dot--cancelled { background: var(--api-muted); }
+
+/* ---------- Sidebar ---------- */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--api-surface);
+  border-right: 1px solid var(--api-border);
+}
+
+.sidebar__actions {
+  display: flex;
+  gap: 8px;
+  padding: 10px 12px 8px;
+}
+.sidebar__actions .btn { flex: 1; justify-content: center; }
+
+.sidebar__search { padding: 0 12px 8px; }
+.sidebar__search .input { width: 100%; }
+
+.sidebar__body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 6px 12px;
+}
+
+.tree-section { margin-top: 4px; }
+.tree-section__head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 4px 6px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--api-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-radius: var(--api-radius-sm);
+}
+.tree-section__head:hover { background: var(--api-surface-2); color: var(--api-fg); }
+.tree-section__head .chevron { transition: transform 150ms ease; }
+.tree-section__head[aria-expanded="false"] .chevron { transform: rotate(-90deg); }
+.tree-section__count { font-weight: 400; }
+.tree-section__spacer { flex: 1; }
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 28px;
+  padding: 2px 6px;
+  border: none;
+  border-left: 2px solid transparent;
+  border-radius: var(--api-radius-sm);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  color: var(--api-fg);
+}
+.tree-row:hover { background: var(--api-surface-2); }
+.tree-row--active {
+  background: var(--api-surface-2);
+  border-left-color: var(--api-primary);
+  font-weight: 600;
+}
+.tree-row .name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tree-row .chevron {
+  flex: none;
+  color: var(--api-muted);
+  transition: transform 150ms ease;
+}
+.tree-row[aria-expanded="false"] .chevron { transform: rotate(-90deg); }
+.tree-row__actions { visibility: hidden; }
+.tree-row:hover .tree-row__actions,
+.tree-row:focus-within .tree-row__actions { visibility: visible; }
+.tree-children { margin-left: 14px; }
+.tree-row--dim { opacity: 0.55; }
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 24px 16px;
+  color: var(--api-muted);
+  text-align: center;
+  font-size: 13px;
+}
+
+.history-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 28px;
+  padding: 2px 6px;
+  border: none;
+  border-radius: var(--api-radius-sm);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  color: var(--api-fg);
+}
+.history-row:hover { background: var(--api-surface-2); }
+.history-row .url {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--api-mono);
+  font-size: 12px;
+}
+.history-row .meta { color: var(--api-muted); font-size: 11px; flex: none; }
+
+/* ---------- Splitters ---------- */
+
+.splitter { position: relative; touch-action: none; }
+.splitter--v { cursor: col-resize; }
+.splitter--h { cursor: row-resize; }
+.splitter::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--api-border);
+  transition: background-color 150ms ease;
+}
+.splitter:hover::after, .splitter--active::after { background: var(--api-primary); }
+.splitter--v::after { left: 1px; right: 1px; }
+.splitter--h::after { top: 1px; bottom: 1px; }
+
+/* ---------- Editor header (breadcrumb + env) ---------- */
+
+.editor-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--api-border);
+  background: var(--api-surface);
+  min-width: 0;
+}
+.editor-head__crumb {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.editor-head__crumb .crumb-dim { color: var(--api-muted); }
+.editor-head__crumb .crumb-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.dirty-mark { color: var(--api-warning); font-weight: 700; margin-left: 2px; }
+
+.editor-head__env {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+.editor-head__env .select { max-width: 180px; }
+
+/* ---------- Command row ---------- */
+
+.command-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 10px 12px;
+}
+.method-select { width: 108px; font-family: var(--api-mono); font-weight: 700; flex: none; }
+.url-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+}
+.url-mirror {
+  position: absolute;
+  inset: 1px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  font-family: var(--api-mono);
+  font-size: 14px;
+  white-space: pre;
+  overflow: hidden;
+  pointer-events: none;
+  color: var(--api-fg);
+  background: var(--api-surface);
+  border-radius: var(--api-radius-sm);
+}
+.url-mirror .url-var {
+  background: color-mix(in srgb, var(--api-warning) 18%, transparent);
+  color: var(--api-warning);
+  border-radius: 4px;
+  padding: 1px 2px;
+  font-weight: 600;
+}
+.url-input {
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  font-family: var(--api-mono);
+  background: transparent;
+}
+/* Input text renders via the mirror; keep caret + selection usable. */
+.url-wrap .url-input { color: transparent; caret-color: var(--api-fg); }
+.url-wrap .url-input::selection { background: color-mix(in srgb, var(--api-primary) 30%, transparent); }
+.command-row .btn--send { flex: none; min-width: 84px; justify-content: center; }
+.command-row .btn--save { flex: none; }
+
+/* ---------- Tabs ---------- */
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--api-border);
+  background: var(--api-surface);
+}
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 10px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--api-muted);
+  cursor: pointer;
+  font-weight: 500;
+}
+.tab:hover { color: var(--api-fg); }
+.tab[aria-selected="true"] {
+  color: var(--api-fg);
+  border-bottom-color: var(--api-primary);
+  font-weight: 600;
+}
+.tab__count {
+  min-width: 18px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: var(--api-surface-2);
+  border: 1px solid var(--api-border);
+  color: var(--api-muted);
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ---------- Request panels ---------- */
+
+.request-panel {
+  overflow: auto;
+  min-height: 0;
+  padding: 12px;
+  background: var(--api-bg);
+}
+.panel-stack { display: flex; flex-direction: column; gap: 8px; }
+
+.field-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--api-danger);
+  font-size: 12px;
+  padding: 2px 0;
+}
+.field-error svg { flex: none; }
+#json-status:not(.field-error) { color: var(--api-primary); }
+
+.hint { color: var(--api-muted); font-size: 12px; }
+
+.section-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--api-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 4px 0;
+}
+
+/* KV editor */
+.kv { border: 1px solid var(--api-border); border-radius: var(--api-radius); overflow: hidden; }
+.kv__head, .kv-row {
+  display: grid;
+  grid-template-columns: 28px minmax(120px, 1fr) minmax(140px, 1.4fr) minmax(100px, 1fr) 56px;
+  gap: 6px;
+  align-items: center;
+  padding: 2px 8px;
+}
+.kv__head {
+  background: var(--api-surface-2);
+  color: var(--api-muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--api-border);
+}
+.kv-row { border-bottom: 1px solid var(--api-border); background: var(--api-surface); }
+.kv-row:last-child { border-bottom: none; }
+.kv-row--disabled .kv-input { opacity: 0.55; }
+.kv-input {
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  padding: 0 6px;
+  width: 100%;
+}
+.kv-input:hover { border-color: var(--api-border); }
+.kv-input:focus {
+  border-color: var(--api-focus);
+  background: var(--api-surface);
+  outline: none;
+}
+.kv-row__menu { display: flex; justify-content: flex-end; }
+.kv-row .icon-btn { width: 28px; height: 26px; }
+.kv__empty { padding: 10px; }
+.kv__foot { padding: 4px 8px; border-top: 1px solid var(--api-border); background: var(--api-surface); }
+
+.secret-wrap { position: relative; display: flex; align-items: center; }
+.secret-wrap .kv-input { padding-right: 28px; }
+.secret-wrap .icon-btn {
+  position: absolute;
+  right: 0;
+  width: 26px; height: 26px;
+}
+
+/* Auth */
+.auth-layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  border: 1px solid var(--api-border);
+  border-radius: var(--api-radius);
+  overflow: hidden;
+  background: var(--api-surface);
+  min-height: 260px;
+}
+.auth-rail { border-right: 1px solid var(--api-border); background: var(--api-surface-2); padding: 4px; }
+.auth-rail__item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--api-radius-sm);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  color: var(--api-fg);
+  font-size: 13px;
+}
+.auth-rail__item:hover { background: color-mix(in srgb, var(--api-primary) 8%, transparent); }
+.auth-rail__item[aria-selected="true"] {
+  background: var(--api-surface);
+  font-weight: 600;
+  box-shadow: inset 0 0 0 1px var(--api-border);
+}
+.auth-detail { padding: 14px 16px; min-width: 0; }
+.auth-detail__title { font-size: 14px; font-weight: 700; margin: 0 0 2px; }
+.auth-detail__desc { color: var(--api-muted); font-size: 13px; margin: 0 0 14px; }
+.auth-detail__field { display: grid; grid-template-columns: 110px 1fr; gap: 8px 12px; align-items: center; max-width: 560px; margin-bottom: 10px; }
+.auth-detail__field > label { font-size: 13px; color: var(--api-muted); }
+.auth-hint {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  max-width: 560px;
+  padding: 9px 12px;
+  border-radius: var(--api-radius-sm);
+  border: 1px solid color-mix(in srgb, var(--api-info) 35%, transparent);
+  background: color-mix(in srgb, var(--api-info) 8%, var(--api-surface));
+  color: var(--api-muted);
+  font-size: 13px;
+}
+.auth-hint .link-btn {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--api-info);
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.auth-hint .link-btn:hover { text-decoration: underline; }
+.auth-session-note { margin-top: 10px; }
+
+/* Body */
+.body-toolbar { display: flex; gap: 6px; align-items: center; margin-bottom: 8px; }
+.body-toolbar .spacer { flex: 1; }
+.body-editor-wrap { position: relative; border: 1px solid var(--api-border); border-radius: var(--api-radius); overflow: hidden; background: var(--api-surface); }
+.body-editor {
+  display: flex;
+  font-family: var(--api-mono);
+  font-size: 13px;
+  line-height: 1.5;
+  min-height: 160px;
+  max-height: 320px;
+}
+.body-gutter {
+  flex: none;
+  width: 44px;
+  padding: 8px 6px 8px 0;
+  text-align: right;
+  color: var(--api-muted);
+  background: var(--api-surface-2);
+  border-right: 1px solid var(--api-border);
+  overflow: hidden;
+  user-select: none;
+  font-size: 12px;
+}
+.body-textarea {
+  flex: 1;
+  border: none;
+  resize: none;
+  background: transparent;
+  padding: 8px;
+  white-space: pre;
+  overflow: auto;
+  min-height: 160px;
+  max-height: 320px;
+  tab-size: 2;
+}
+.body-textarea:focus { outline: none; }
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 10px 16px;
+  align-items: center;
+  max-width: 560px;
+}
+.settings-grid .input { max-width: 160px; }
+.tls-warning { margin-top: 12px; max-width: 560px; }
+
+/* ---------- Response area ---------- */
+
+.response-area {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--api-bg);
+}
+.response-summary {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--api-border);
+  background: var(--api-surface);
+  min-height: 40px;
+  flex-wrap: wrap;
+}
+.response-summary .stat { display: inline-flex; align-items: center; gap: 5px; font-size: 13px; }
+.response-summary .stat .mono { font-size: 12px; }
+.response-summary__spacer { flex: 1; }
+.response-summary .status-text { font-weight: 600; }
+
+.response-body-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.response-body-wrap--sending { opacity: 0.45; }
+.sending-note {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: var(--api-surface);
+  border: 1px solid var(--api-border);
+  box-shadow: 0 2px 10px color-mix(in srgb, #000 18%, transparent);
+  font-size: 13px;
+}
+.spinner {
+  width: 14px; height: 14px;
+  border: 2px solid var(--api-border);
+  border-top-color: var(--api-primary);
+  border-radius: 50%;
+  animation: api-spin 0.8s linear infinite;
+}
+@keyframes api-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .spinner { animation-duration: 2.4s; }
+  * { transition-duration: 0.01ms !important; }
+}
+
+.error-card {
+  margin: 12px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--api-danger) 45%, transparent);
+  border-left: 3px solid var(--api-danger);
+  border-radius: var(--api-radius);
+  background: color-mix(in srgb, var(--api-danger) 7%, var(--api-surface));
+}
+.error-card__title { display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--api-danger); }
+.error-card__cause { margin: 6px 0; font-family: var(--api-mono); font-size: 12px; word-break: break-all; color: var(--api-muted); }
+.error-card__next { font-size: 13px; margin: 4px 0 10px; }
+
+.truncate-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 12px 0;
+  padding: 8px 12px;
+  border-radius: var(--api-radius);
+  border: 1px solid color-mix(in srgb, var(--api-warning) 45%, transparent);
+  background: color-mix(in srgb, var(--api-warning) 10%, var(--api-surface));
+  color: var(--api-warning);
+  font-size: 13px;
+}
+.truncate-note svg, .error-card__title svg, .auth-hint svg { flex: none; }
+
+.cancelled-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px;
+  padding: 10px 14px;
+  border-radius: var(--api-radius);
+  border: 1px solid var(--api-border);
+  background: var(--api-surface);
+  color: var(--api-muted);
+}
+
+/* response tab bar reuses .tabs; content region: */
+.response-content {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.json-toolbar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--api-border);
+  background: var(--api-surface);
+  flex-wrap: wrap;
+}
+.json-toolbar .input { height: 28px; width: 200px; }
+.json-toolbar .spacer { flex: 1; }
+
+.jsonview {
+  font-family: var(--api-mono);
+  font-size: 13px;
+  line-height: 1.55;
+  padding: 8px 12px 24px;
+  user-select: text;
+}
+.jv-row { display: flex; align-items: baseline; }
+.jv-toggle {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  color: var(--api-muted);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+}
+.jv-toggle:hover { background: var(--api-surface-2); color: var(--api-fg); }
+.jv-toggle[aria-expanded="false"] svg { transform: rotate(-90deg); }
+.jv-row--clickable { cursor: context-menu; border-radius: 3px; }
+.jv-row--clickable:hover { background: var(--api-surface-2); }
+.jv-key { color: var(--api-json-key); }
+.jv-punct { color: var(--api-muted); }
+.jv-string { color: var(--api-json-string); white-space: pre-wrap; word-break: break-all; }
+.jv-number { color: var(--api-json-number); }
+.jv-literal { color: var(--api-json-literal); }
+.jv-summary { color: var(--api-muted); font-size: 12px; }
+.jv-children { margin-left: 18px; border-left: 1px dotted var(--api-border); padding-left: 8px; }
+
+.pre-code {
+  margin: 0;
+  padding: 8px 12px 24px;
+  font-family: var(--api-mono);
+  font-size: 13px;
+  line-height: 1.55;
+  white-space: pre;
+  overflow: auto;
+  user-select: text;
+}
+
+.headers-table { border-collapse: collapse; margin: 8px 12px 24px; font-size: 13px; }
+.headers-table th, .headers-table td {
+  text-align: left;
+  padding: 5px 12px 5px 0;
+  border-bottom: 1px solid var(--api-border);
+  vertical-align: top;
+}
+.headers-table th { color: var(--api-muted); font-weight: 600; font-size: 12px; }
+.headers-table td:first-child { font-family: var(--api-mono); color: var(--api-json-key); white-space: nowrap; }
+.headers-table td:last-child { font-family: var(--api-mono); word-break: break-all; user-select: text; }
+
+.timing-table { border-collapse: collapse; margin: 12px; max-width: 560px; width: calc(100% - 24px); }
+.timing-table th, .timing-table td { text-align: left; padding: 6px 10px 6px 0; border-bottom: 1px solid var(--api-border); font-size: 13px; }
+.timing-table th { color: var(--api-muted); font-size: 12px; font-weight: 600; }
+.timing-table .bar-cell { width: 45%; }
+.timing-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--api-surface-2);
+  overflow: hidden;
+}
+.timing-bar__fill {
+  height: 100%;
+  border-radius: 4px;
+  background: var(--api-primary);
+}
+.timing-na { color: var(--api-muted); }
+
+/* ---------- Dialogs, menus, toast ---------- */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: color-mix(in srgb, #000 40%, transparent);
+  display: grid;
+  place-items: center;
+}
+.dialog {
+  width: min(420px, calc(100vw - 48px));
+  max-height: calc(100vh - 64px);
+  overflow: auto;
+  background: var(--api-surface);
+  border: 1px solid var(--api-border);
+  border-radius: var(--api-radius);
+  box-shadow: 0 12px 48px color-mix(in srgb, #000 30%, transparent);
+  padding: 16px;
+}
+.dialog--wide { width: min(720px, calc(100vw - 48px)); }
+.dialog__title { font-size: 15px; font-weight: 700; margin: 0 0 10px; }
+.dialog__message { margin: 0 0 14px; }
+.dialog__field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.dialog__field label { font-size: 13px; font-weight: 600; }
+.dialog__field .input { height: 32px; }
+.dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 6px;
+}
+.dialog__error { color: var(--api-danger); font-size: 12px; margin-bottom: 8px; }
+
+.menu {
+  position: fixed;
+  z-index: 80;
+  min-width: 180px;
+  padding: 4px;
+  background: var(--api-surface);
+  border: 1px solid var(--api-border);
+  border-radius: var(--api-radius-sm);
+  box-shadow: 0 6px 24px color-mix(in srgb, #000 22%, transparent);
+}
+.menu__item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  color: var(--api-fg);
+  font-size: 13px;
+}
+.menu__item:hover, .menu__item:focus { background: var(--api-surface-2); outline: none; }
+.menu__item--danger { color: var(--api-danger); }
+.menu__item:disabled { opacity: 0.45; cursor: not-allowed; }
+.menu__sep { height: 1px; margin: 4px 6px; background: var(--api-border); }
+
+.toast-region {
+  position: fixed;
+  bottom: 14px;
+  right: 14px;
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-end;
+}
+.toast {
+  padding: 7px 12px;
+  border-radius: var(--api-radius-sm);
+  background: var(--api-fg);
+  color: var(--api-bg);
+  font-size: 13px;
+  box-shadow: 0 4px 16px color-mix(in srgb, #000 25%, transparent);
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+.toast--shown { opacity: 1; transform: none; }
+
+/* ---------- Environment manager ---------- */
+
+.env-manager { display: grid; grid-template-columns: 200px 1fr; gap: 12px; min-height: 320px; }
+.env-list { border: 1px solid var(--api-border); border-radius: var(--api-radius); overflow: auto; background: var(--api-surface); }
+.env-list__item {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: none;
+  border-bottom: 1px solid var(--api-border);
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+.env-list__item:last-child { border-bottom: none; }
+.env-list__item:hover { background: var(--api-surface-2); }
+.env-list__item--active { background: var(--api-surface-2); font-weight: 600; }
+.env-editor { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.env-editor__head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.env-editor__head .input { height: 30px; }
+.env-vars { flex: 1; min-height: 0; overflow: auto; }
+.env-var-row {
+  display: grid;
+  grid-template-columns: minmax(100px, 1fr) minmax(120px, 1.3fr) auto auto 28px;
+  gap: 6px;
+  align-items: center;
+  padding: 2px 0;
+}
+.env-var-row .kv-input { border: 1px solid var(--api-border); border-radius: 4px; background: var(--api-surface); height: 28px; }
+
+.boot {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--api-muted);
+  gap: 10px;
+}
+
+@media (max-width: 900px) {
+  .auth-layout { grid-template-columns: 1fr; }
+  .auth-rail { display: flex; flex-wrap: wrap; border-right: none; border-bottom: 1px solid var(--api-border); }
+  .auth-rail__item { width: auto; }
+  .settings-grid { grid-template-columns: 1fr; }
+  .env-manager { grid-template-columns: 1fr; }
+}
+
+/* ---------- Response area with diagnostics panel ---------- */
+
+.response-columns {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  min-width: 0;
+}
+.response-columns .response-body-wrap { flex: 1; min-width: 0; }
+.diagnostics-panel {
+  flex: none;
+  width: 320px;
+  border-left: 1px solid var(--api-border);
+  background: var(--api-surface);
+  overflow: auto;
+  padding: 12px 14px 24px;
+}
+.diagnostics-panel h3 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 700;
+  margin: 0 0 10px;
+}
+.diagnostics-panel h3 .mono { font-weight: 600; color: var(--api-fg); }
+.diag-section { margin-bottom: 20px; }
+.diag-row {
+  display: grid;
+  grid-template-columns: 1fr 64px;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 0;
+  font-size: 13px;
+}
+.diag-row .mono { text-align: right; font-size: 12px; }
+.diag-row--na { color: var(--api-muted); }
+.diag-bar {
+  grid-column: 1 / -1;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--api-surface-2);
+  overflow: hidden;
+  margin-top: -2px;
+}
+.diag-bar__fill { height: 100%; border-radius: 3px; background: var(--api-primary); transition: width 200ms ease; }
+.diag-info { border-top: 1px solid var(--api-border); padding-top: 10px; }
+.diag-info .diag-row { grid-template-columns: 88px 1fr; }
+.diag-info .diag-row .mono { text-align: left; word-break: break-all; }
+.diag-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px;
+  border-radius: 4px;
+  font-family: var(--api-mono);
+  font-size: 12px;
+  font-weight: 700;
+  background: color-mix(in srgb, #16a34a 14%, transparent);
+  color: #15803d;
+}
+body[data-fallback="dark"] .diag-status { color: #4ade80; }
+
+@media (max-width: 1280px) {
+  .diagnostics-panel { width: 280px; }
+}
+
+/* Pretty JSON with line numbers */
+.pretty-json {
+  display: flex;
+  font-family: var(--api-mono);
+  font-size: 13px;
+  line-height: 1.55;
+  overflow: auto;
+  margin: 0 12px 24px;
+  border: 1px solid var(--api-border);
+  border-radius: var(--api-radius);
+  background: var(--api-surface);
+  user-select: text;
+}
+.pretty-json__gutter {
+  flex: none;
+  padding: 8px 8px 8px 0;
+  text-align: right;
+  color: var(--api-muted);
+  background: var(--api-surface-2);
+  border-right: 1px solid var(--api-border);
+  user-select: none;
+  font-size: 12px;
+  white-space: pre;
+  position: sticky;
+  left: 0;
+}
+.pretty-json__code {
+  padding: 8px 12px;
+  white-space: pre;
+  margin: 0;
+}
+.pretty-json__code .pj-key { color: var(--api-json-key); }
+.pretty-json__code .pj-string { color: var(--api-json-string); }
+.pretty-json__code .pj-number { color: var(--api-json-number); }
+.pretty-json__code .pj-literal { color: var(--api-json-literal); }
+
+/* tree row count badge */
+.tree-count {
+  flex: none;
+  min-width: 20px;
+  height: 16px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--api-surface-2);
+  border: 1px solid var(--api-border);
+  color: var(--api-muted);
+  font-size: 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.crumb-rename { width: 24px; height: 22px; }
+
+/* ============================================================
+   Polish layer (matches the reference design): gray app canvas,
+   white cards, branded sidebar header, colored method text,
+   split send button, merged response tab bar.
+   Appended last on purpose — these rules override the base layer.
+   ============================================================ */
+
+:root {
+  --api-json-key: #c92a2a;
+  --api-json-string: #1a6fe8;
+  --api-json-number: #0f172a;
+  --api-json-literal: #d97706;
+}
+body[data-fallback="dark"] {
+  --api-json-key: #ff8787;
+  --api-json-string: #74c0fc;
+  --api-json-number: #e9ecef;
+  --api-json-literal: #ffa94d;
+}
+
+/* Gray canvas + white cards */
+.app { background: var(--api-surface-2); }
+.app--sidebar-collapsed { grid-template-columns: 0 0 1fr; }
+.app--sidebar-collapsed .sidebar,
+.app--sidebar-collapsed .splitter--v { display: none; }
+
+.sidebar { background: var(--api-surface-2); }
+.editor-head, .command-row, .request-panel { background: transparent; }
+.tabs { background: transparent; }
+.response-area { background: var(--api-surface-2); }
+.response-columns, .response-content { background: var(--api-surface); }
+.diagnostics-panel { background: var(--api-surface); }
+.json-toolbar { background: var(--api-surface); }
+.kv, .auth-layout, .body-editor-wrap, .pretty-json { box-shadow: 0 1px 2px color-mix(in srgb, #000 4%, transparent); }
+
+/* Branded sidebar header */
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 12px 10px 14px;
+}
+.sidebar-header__logo { width: 34px; height: 34px; flex: none; border-radius: 9px; }
+.sidebar-header__text { min-width: 0; }
+.sidebar-header__title { font-size: 15px; font-weight: 800; letter-spacing: -0.01em; line-height: 1.2; }
+.sidebar-header__subtitle {
+  font-size: 12px;
+  color: var(--api-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-header__spacer { flex: 1; }
+.sidebar-header .icon-btn { width: 26px; height: 26px; font-weight: 700; }
+
+/* Colored method text (reference style: text, not chips) */
+.method-text {
+  flex: none;
+  width: 50px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.method-text--GET { color: #16a34a; }
+.method-text--POST { color: #ea580c; }
+.method-text--PUT { color: #2563eb; }
+.method-text--PATCH { color: #9333ea; }
+.method-text--DELETE { color: #dc2626; }
+body[data-fallback="dark"] .method-text--GET { color: #4ade80; }
+body[data-fallback="dark"] .method-text--POST { color: #fb923c; }
+body[data-fallback="dark"] .method-text--PUT { color: #60a5fa; }
+body[data-fallback="dark"] .method-text--PATCH { color: #c084fc; }
+body[data-fallback="dark"] .method-text--DELETE { color: #f87171; }
+
+.tree-section__head svg, .tree-row > svg:first-child { color: var(--api-muted); }
+
+/* Method selector: borderless colored text */
+.method-select {
+  border-color: transparent;
+  background: transparent;
+  font-weight: 800;
+  width: 96px;
+}
+.method-select:hover { border-color: var(--api-border); background: var(--api-surface); }
+.method-select--GET { color: #16a34a; }
+.method-select--POST { color: #ea580c; }
+.method-select--PUT { color: #2563eb; }
+.method-select--PATCH { color: #9333ea; }
+.method-select--DELETE { color: #dc2626; }
+body[data-fallback="dark"] .method-select--GET { color: #4ade80; }
+body[data-fallback="dark"] .method-select--POST { color: #fb923c; }
+body[data-fallback="dark"] .method-select--PUT { color: #60a5fa; }
+body[data-fallback="dark"] .method-select--PATCH { color: #c084fc; }
+body[data-fallback="dark"] .method-select--DELETE { color: #f87171; }
+
+/* Split send button: [✈ 发送 | ▾] */
+.send-group { display: inline-flex; flex: none; }
+.send-group .btn--send {
+  border-radius: var(--api-radius-sm) 0 0 var(--api-radius-sm);
+  min-width: 96px;
+  gap: 7px;
+}
+.send-caret {
+  width: 24px;
+  height: 32px;
+  border: 1px solid var(--api-primary);
+  border-left: 1px solid color-mix(in srgb, var(--api-primary-fg) 45%, transparent);
+  background: var(--api-primary);
+  color: var(--api-primary-fg);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border-radius: 0 var(--api-radius-sm) var(--api-radius-sm) 0;
+}
+.send-caret:hover { filter: brightness(1.06); }
+
+/* URL variable pill: info blue like the reference */
+.url-mirror .url-var {
+  background: color-mix(in srgb, var(--api-info) 15%, transparent);
+  color: var(--api-info);
+  border-radius: 4px;
+  padding: 1px 2px;
+  font-weight: 600;
+}
+
+/* Auth rail: selected gets green tint + left accent; icons muted */
+.auth-rail__item svg { color: var(--api-muted); flex: none; }
+.auth-rail__item[aria-selected="true"] svg { color: var(--api-primary); }
+.auth-rail__item[aria-selected="true"] {
+  background: color-mix(in srgb, var(--api-primary) 11%, transparent);
+  box-shadow: inset 2px 0 0 var(--api-primary);
+}
+
+/* Response tab bar: tabs + status summary in one row */
+.response-tabbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 0 8px 0 2px;
+  border-bottom: 1px solid var(--api-border);
+  flex-wrap: wrap;
+}
+.response-tabbar .tabs { border-bottom: none; padding: 0 0 0 2px; }
+.response-summary {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-right: 2px;
+}
+.response-summary .stat { font-size: 12px; }
+.response-summary .stat--status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 700;
+  color: #15803d;
+}
+body[data-fallback="dark"] .response-summary .stat--status { color: #4ade80; }
+.response-summary .icon-btn { width: 28px; height: 26px; }
+
+/* JSON body toolbar chip */
+.body-format-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--api-border);
+  border-radius: var(--api-radius-sm);
+  background: var(--api-surface);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--api-muted);
+  flex: none;
+}
+
+/* Diagnostics: big total bar like the reference */
+.diag-total-bar {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--api-surface-2);
+  overflow: hidden;
+  margin: 0 0 10px;
+}
+.diag-total-bar__fill {
+  height: 100%;
+  background: var(--api-primary);
+  border-radius: 4px;
+}
+
+/* Breadcrumb */
+.editor-head__crumb svg { color: var(--api-muted); flex: none; }
+
+</style>
+</head>
+<body>
+<div class="app" id="app" hidden>
+  <nav class="sidebar" id="sidebar" aria-label="API Studio">
+    <div class="sidebar-header">
+      <svg class="sidebar-header__logo" viewBox="0 0 36 36" aria-hidden="true">
+        <defs>
+          <linearGradient id="api-logo-grad" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#3b82f6" />
+            <stop offset="1" stop-color="#10b981" />
+          </linearGradient>
+        </defs>
+        <rect x="1" y="1" width="34" height="34" rx="9" fill="url(#api-logo-grad)" />
+        <g stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round">
+          <path d="M12 13l12 5M12.5 24.5l11.5-6" />
+        </g>
+        <g fill="#fff">
+          <circle cx="10.2" cy="11.8" r="2.6" />
+          <circle cx="26" cy="18" r="2.6" />
+          <circle cx="10.8" cy="25.4" r="2.6" />
+        </g>
+      </svg>
+      <div class="sidebar-header__text">
+        <div class="sidebar-header__title">API Studio</div>
+        <div class="sidebar-header__subtitle" data-i18n="appSubtitle"></div>
+      </div>
+      <span class="sidebar-header__spacer"></span>
+      <button class="icon-btn" id="btn-sidebar-collapse" data-i18n-aria="collapseSidebar"></button>
+    </div>
+    <div class="sidebar__actions">
+      <button class="btn" id="btn-new-request" data-i18n="newRequest"></button>
+      <button class="btn" id="btn-new-collection" data-i18n="newCollection"></button>
+    </div>
+    <div class="sidebar__search">
+      <input class="input" id="search-input" data-i18n-ph="searchPlaceholder"
+             type="search" role="searchbox" data-i18n-aria="searchPlaceholder" />
+    </div>
+    <div class="sidebar__body" id="tree-root"></div>
+  </nav>
+
+  <div class="splitter splitter--v" id="splitter-sidebar" role="separator"
+       aria-orientation="vertical" aria-label="Resize sidebar" tabindex="0"></div>
+
+  <div class="main-col">
+    <header class="editor-head">
+      <button class="icon-btn" id="btn-sidebar-show" data-i18n-aria="showSidebar" hidden></button>
+      <div class="editor-head__crumb" id="breadcrumb"></div>
+      <div class="editor-head__env">
+        <span class="badge badge--prod" id="env-prod-badge" hidden data-i18n="prodBadge"></span>
+        <label class="hint" for="env-select" data-i18n="environment"></label>
+        <button class="icon-btn" id="btn-env-manager" data-i18n-aria="manageEnvironments"
+                aria-haspopup="dialog"></button>
+        <select class="select" id="env-select"></select>
+      </div>
+    </header>
+
+    <section aria-label="Request editor">
+      <div class="command-row">
+        <select class="select method-select" id="method-select" aria-label="HTTP method"></select>
+        <div class="url-wrap" id="url-wrap">
+          <div class="url-mirror" id="url-mirror" aria-hidden="true"></div>
+          <input class="input url-input mono" id="url-input" type="text" spellcheck="false"
+                 aria-label="Request URL" placeholder="https://" autocomplete="off" />
+        </div>
+        <span class="send-group">
+          <button class="btn btn--primary btn--send" id="btn-send"></button>
+          <button class="send-caret" id="btn-send-caret" data-i18n-aria="moreActions"
+                  aria-haspopup="menu" title="More actions"></button>
+        </span>
+        <button class="btn btn--save" id="btn-save"></button>
+        <button class="icon-btn" id="btn-request-menu" data-i18n-aria="moreActions"
+                aria-haspopup="menu"></button>
+      </div>
+      <div class="tabs" id="editor-tabs" role="tablist" aria-label="Request sections"></div>
+      <div class="request-panel" id="editor-panel" role="tabpanel"></div>
+    </section>
+
+    <div class="splitter splitter--h" id="splitter-response" role="separator"
+         aria-orientation="horizontal" aria-label="Resize response area" tabindex="0"></div>
+
+    <section class="response-area" aria-label="Response">
+      <div class="response-tabbar">
+        <div class="tabs" id="response-tabs" role="tablist" aria-label="Response"></div>
+        <div class="response-summary" id="response-summary"></div>
+      </div>
+      <div class="response-columns">
+        <div class="response-body-wrap" id="response-wrap">
+          <div class="response-content" id="response-content"></div>
+        </div>
+        <aside class="diagnostics-panel" id="diagnostics-panel"
+               aria-label="Diagnostics" data-i18n-aria="diagnostics"></aside>
+      </div>
+    </section>
+  </div>
+</div>
+
+<div class="boot" id="boot">
+  <div class="spinner" role="status" aria-live="polite"></div>
+  <span data-i18n="booting">Starting API Studio…</span>
+</div>
+
+<div class="toast-region" id="toast-region"></div>
+<div class="visually-hidden" id="live-region" role="alert" aria-live="assertive"></div>
+<div class="visually-hidden" id="live-region-polite" role="status" aria-live="polite"></div>
+
+<script>
+"use strict";
+(function () {
+/* ==== js/00-utils.js ==== */
+
+/* ==== DOM + misc helpers ==== */
+
+const $ = (sel, root) => (root || document).querySelector(sel);
+
+function el(tag, attrs, ...children) {
+  const node = document.createElement(tag);
+  if (attrs) {
+    for (const [key, value] of Object.entries(attrs)) {
+      if (value == null) continue;
+      if (key === "class") node.className = value;
+      else if (key === "text") node.textContent = value;
+      else if (key === "html") node.innerHTML = value;
+      else if (key.startsWith("on") && typeof value === "function") {
+        node.addEventListener(key.slice(2), value);
+      } else if (key === "dataset") {
+        Object.assign(node.dataset, value);
+      } else {
+        node.setAttribute(key, value);
+      }
+    }
+  }
+  for (const child of children.flat()) {
+    if (child == null) continue;
+    node.append(child);
+  }
+  return node;
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/** Single icon family: 1.75px strokes, 16px box (ui-style.md icon rule). */
+function icon(name) {
+  const paths = {
+    chevron: '<path d="M4 6l4 4 4-4" />',
+    plus: '<path d="M8 3v10M3 8h10" />',
+    eye: '<path d="M1.5 8s2.4-4.5 6.5-4.5S14.5 8 14.5 8 12.1 12.5 8 12.5 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2" />',
+    eyeOff: '<path d="M3 3l10 10M6.6 6.7a2 2 0 002.8 2.8M4.4 4.6C2.6 5.8 1.5 8 1.5 8s2.4 4.5 6.5 4.5c1 0 1.9-.2 2.7-.6M7 3.6c.3 0 .7-.1 1-.1 4.1 0 6.5 4.5 6.5 4.5s-.5 1-1.5 2.1" />',
+    trash: '<path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5" />',
+    copy: '<rect x="5.5" y="5.5" width="8" height="8" rx="1"/><path d="M10.5 5.5v-2a1 1 0 00-1-1h-6a1 1 0 00-1 1v6a1 1 0 001 1h2" />',
+    dots: '<circle cx="3.5" cy="8" r="1.2"/><circle cx="8" cy="8" r="1.2"/><circle cx="12.5" cy="8" r="1.2"/>',
+    search: '<circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5L14 14" />',
+    pencil: '<path d="M3 13l.8-3.2 7-7a1.4 1.4 0 012 0l1.4 1.4a1.4 1.4 0 010 2l-7 7L2 13z" />',
+    columns: '<rect x="2.5" y="3" width="11" height="10" rx="1"/><path d="M8 3v10" />',
+    send: '<path d="M14 2L7 9" /><path d="M14 2L9.6 14l-2.1-4.9L2.5 7z" />',
+    globe: '<circle cx="8" cy="8" r="5.5"/><path d="M2.5 8h11"/><path d="M8 2.5c2 1.8 2 9.2 0 11-2-1.8-2-9.2 0-11z" />',
+    home: '<path d="M3 7.5L8 3l5 4.5"/><path d="M4.5 6.8V13h7V6.8" />',
+    folder: '<path d="M2.5 12.5v-8h4l1.5 2h5.5v6z" />',
+    clock: '<circle cx="8" cy="8" r="5.5"/><path d="M8 5v3l2.2 1.4" />',
+    save: '<path d="M3 3.5h7.5L13 6v6.5H3z"/><path d="M5 3.5V7h5V3.5"/><path d="M5.2 12.5V9.5h5.6v3" />',
+    slash: '<circle cx="8" cy="8" r="5.5"/><path d="M4.4 11.6l7.2-7.2" />',
+    keyIcon: '<circle cx="5.5" cy="10.5" r="2.8"/><path d="M7.6 8.4L13.8 2.2M11 5l1.8 1.8" />',
+    shield: '<path d="M8 2.2l5 1.8v3.6c0 3.1-2 5.6-5 6.4-3-.8-5-3.3-5-6.4V4z" />',
+    user: '<circle cx="8" cy="5.3" r="2.4"/><path d="M2.8 13.2c.9-2.3 2.8-3.4 5.2-3.4s4.3 1.1 5.2 3.4" />',
+    alert: '<path d="M8 2.6l5.6 10.2H2.4z" /><path d="M8 6.6v3.2" /><path d="M8 11.4v.01" />',
+    info: '<circle cx="8" cy="8" r="5.6" /><path d="M8 7.4v4" /><path d="M8 5.1v.01" />',
+    check: '<path d="M3.5 8.5l3 3 6-6.5" />',
+    chevronsLeft: '<path d="M7.5 4L4 8l3.5 4" /><path d="M12 4L8.5 8l3.5 4" />',
+    chevronsRight: '<path d="M8.5 4L12 8l-3.5 4" /><path d="M4 4l3.5 4L4 12" />',
+  };
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("width", "16");
+  svg.setAttribute("height", "16");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.75");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  svg.innerHTML = paths[name] || "";
+  return svg;
+}
+
+function randomId() {
+  const bytes = crypto.getRandomValues(new Uint8Array(9));
+  return Array.from(bytes, (b) => b.toString(36).padStart(2, "0")).join("").slice(0, 16);
+}
+
+function uuid(prefix) {
+  const core = crypto.randomUUID ? crypto.randomUUID() : randomId();
+  return (prefix ? prefix + "_" : "") + core;
+}
+
+function debounce(fn, wait) {
+  let timer;
+  const wrapped = (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), wait);
+  };
+  wrapped.cancel = () => clearTimeout(timer);
+  return wrapped;
+}
+
+function formatBytes(bytes) {
+  if (bytes == null) return "—";
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(2) + " MB";
+}
+
+function formatMs(ms) {
+  if (ms == null) return "—";
+  if (ms < 1000) return ms + " ms";
+  return (ms / 1000).toFixed(2) + " s";
+}
+
+function formatTime(ts) {
+  try {
+    return new Date(ts).toLocaleTimeString(undefined, { hour12: false });
+  } catch {
+    return "";
+  }
+}
+
+function timeAgo(ts) {
+  const delta = Date.now() - ts;
+  if (delta < 60_000) return I18N.t("justNow");
+  if (delta < 3_600_000) return Math.floor(delta / 60_000) + " min";
+  if (delta < 86_400_000) return Math.floor(delta / 3_600_000) + " h";
+  return Math.floor(delta / 86_400_000) + " d";
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    // Sandbox fallback: transient textarea + legacy command.
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.append(area);
+    area.select();
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch { ok = false; }
+    area.remove();
+    return ok;
+  }
+}
+
+function toast(message) {
+  const region = $("#toast-region");
+  const node = el("div", { class: "toast", text: message });
+  region.append(node);
+  requestAnimationFrame(() => node.classList.add("toast--shown"));
+  setTimeout(() => {
+    node.classList.remove("toast--shown");
+    setTimeout(() => node.remove(), 200);
+  }, 1600);
+}
+
+function announce(message, polite) {
+  const region = $(polite ? "#live-region-polite" : "#live-region");
+  region.textContent = "";
+  setTimeout(() => { region.textContent = message; }, 30);
+}
+
+function deepClone(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+
+/* ==== js/05-i18n.js ==== */
+
+/* ==== i18n: zh-CN / en dictionaries ==== */
+
+const I18N = (() => {
+  const dict = {
+    en: {
+      booting: "Starting API Studio…",
+      appSubtitle: "Build, send and debug API requests",
+      collapseSidebar: "Collapse sidebar",
+      showSidebar: "Show sidebar",
+      newRequest: "+ New Request",
+      newCollection: "New Collection",
+      searchPlaceholder: "Search requests (name, URL, method)",
+      collections: "Collections",
+      history: "History",
+      justNow: "just now",
+      emptyCollections: "No collections yet. Create a collection to save requests.",
+      noSearchResults: "No requests match your search.",
+      emptyHistory: "Requests you send will appear here (redacted, kept up to 500).",
+      newFolder: "New folder",
+      newRequestIn: "New request",
+      rename: "Rename",
+      duplicate: "Duplicate",
+      deleteCollection: "Delete collection",
+      deleteFolder: "Delete folder",
+      deleteRequest: "Delete request",
+      clearHistory: "Clear",
+      clearHistoryConfirm: "Clear all history entries? This cannot be undone.",
+      deleteCollectionConfirm: "Delete collection \"{name}\" and everything in it?",
+      deleteFolderConfirm: "Delete folder \"{name}\" and its requests?",
+      deleteRequestConfirm: "Delete request \"{name}\"?",
+      environment: "Environment",
+      noEnvironment: "No Environment",
+      manageEnvironments: "Manage environments",
+      prodBadge: "PROD",
+      send: "Send",
+      cancel: "Cancel",
+      save: "Save",
+      moreActions: "More actions",
+      copyAsCurl: "Copy as cURL",
+      tabParams: "Params",
+      tabHeaders: "Headers",
+      tabAuth: "Auth",
+      tabBody: "Body",
+      tabSettings: "Settings",
+      responseBody: "Body",
+      responseHeaders: "Headers",
+      responseTiming: "Timing",
+      cookies: "Cookies",
+      noCookies: "No cookies in this response.",
+      diagnostics: "Diagnostics",
+      timingPanelTitle: "Request timing",
+      phaseTotal: "Total",
+      phaseDns: "DNS",
+      phaseConnect: "Connect",
+      phaseTls: "TLS handshake",
+      phaseRequest: "Request sent",
+      phaseTtfb: "Waiting (TTFB)",
+      phaseDownload: "Response download",
+      responseInfo: "Response info",
+      infoStatus: "Status",
+      infoSize: "Size",
+      infoType: "Content type",
+      infoServer: "Server",
+      infoFinalUrl: "Final URL",
+      infoRedirects: "Redirects",
+      redirectCountLabel: "{count} redirects",
+      viewText: "Text",
+      viewTree: "Tree",
+      prettify: "Prettify",
+      key: "Key",
+      value: "Value",
+      description: "Description",
+      enabled: "Enabled",
+      addParam: "Add parameter",
+      addHeader: "Add header",
+      addVariable: "Add variable",
+      rowMenu: "Row actions",
+      duplicateRow: "Duplicate row",
+      deleteRow: "Delete row",
+      authType: "Type",
+      authNone: "No Auth",
+      authBearer: "Bearer Token",
+      authBasic: "Basic Auth",
+      authApiKey: "API Key",
+      authNoneDesc: "Send the request without authentication.",
+      authBearerDesc: "Adds a Bearer token to the Authorization header.",
+      authBasicDesc: "Adds a username and password as a Basic Auth header.",
+      authApiKeyDesc: "Sends an API key as a header or query parameter.",
+      authHint: "Tip: define variables like the token in environment variables, or reuse them across requests.",
+      goToEnvSettings: "Environment settings →",
+      authIn: "Add to",
+      authHeader: "Header",
+      authQuery: "Query",
+      tokenLabel: "Token",
+      usernameLabel: "Username",
+      passwordLabel: "Password",
+      apiKeyNameLabel: "Key name",
+      apiKeyValueLabel: "Key value",
+      authSessionNote: "Credential values here are kept for this session only and are never written to disk. Define them as {{variables}} or secret environment variables to reuse them. Credential-named headers and query parameters behave the same way.",
+      bodyType: "Body type",
+      bodyNone: "None",
+      bodyJson: "JSON",
+      bodyText: "Text",
+      bodyForm: "URL Encoded",
+      format: "Format",
+      minify: "Minify",
+      jsonValid: "Valid JSON",
+      jsonInvalid: "Invalid JSON",
+      unresolvedVars: "Unresolved variables: {vars}",
+      invalidUrl: "Enter a valid http(s) URL",
+      settings: "Settings",
+      timeout: "Timeout (ms)",
+      followRedirects: "Follow redirects",
+      maxRedirects: "Max redirects",
+      verifyTls: "Verify TLS certificate",
+      tlsWarning: "TLS verification is disabled for this request. Enable it unless you specifically trust this endpoint.",
+      previewCap: "Response preview limit",
+      sending: "Sending new request…",
+      requestCancelled: "Request cancelled",
+      errSummary: "Request failed",
+      errNext: "Next step:",
+      nextInvalidUrl: "Check the URL format and scheme (http or https).",
+      nextInvalidRequest: "Recreate the request in the editor, then send again.",
+      nextVariableUnresolved: "Define the missing variable in the request or the selected environment.",
+      nextDnsFailed: "Check the hostname and your network connection.",
+      nextConnectFailed: "The server refused or dropped the connection. Verify host and port.",
+      nextTlsFailed: "Certificate validation failed. Check the certificate before disabling TLS verification.",
+      nextTimeout: "Raise the timeout in Settings, or check whether the service is reachable.",
+      nextRequestCancelled: "Send again when you are ready.",
+      nextTooManyRedirects: "Raise the redirect limit in Settings, or fix the redirect loop.",
+      nextBodyTooLarge: "Raise the response preview limit in Settings.",
+      nextInternalError: "Retry the request; if it keeps failing, check the sidecar logs.",
+      bodyNotRestored: "The request body was not stored in history and needs to be re-entered.",
+      revealValue: "Reveal value",
+      hideValue: "Hide value",
+      expandNode: "Expand",
+      urlLabel: "URL",
+      validateJson: "JSON",
+      moreIn: "More actions",
+      retry: "Retry",
+      noResponse: "Send a request to see the response here.",
+      responseOf: "Response",
+      truncatedNote: "Response exceeded the {cap} preview limit; showing the first {shown}. Raise the limit in Settings if needed.",
+      binaryBody: "Binary response ({size}, {type}) — no text preview available.",
+      collapsed: "{count} more items…",
+      copyValue: "Copy value",
+      copyKey: "Copy key",
+      copyPath: "Copy JSONPath",
+      setEnvVar: "Set as environment variable",
+      setEnvVarDisabled: "Not available for truncated or oversized values",
+      copied: "Copied",
+      copyFailed: "Copy failed",
+      envVarSet: "Variable \"{name}\" set in {env}",
+      searchJson: "Search in JSON…",
+      noJsonMatches: "No matches",
+      timingTotal: "Total",
+      timingNotAvailable: "Not available",
+      timingNote: "The sidecar currently measures total time only. Additional phases appear when the transport reports them.",
+      envManagerTitle: "Environments",
+      envName: "Name",
+      newEnv: "+ New environment",
+      noEnvSelected: "Select an environment to edit its variables.",
+      prodLike: "Production-like (shows warning badge)",
+      confirmUnsafe: "Confirm before unsafe methods (POST/PUT/PATCH/DELETE)",
+      secret: "Secret",
+      secretNote: "Secret values are never saved to disk. They must be re-entered each session.",
+      deleteEnv: "Delete environment",
+      deleteEnvConfirm: "Delete environment \"{name}\"?",
+      unsavedTitle: "Unsaved changes",
+      unsavedMessage: "The current request has unsaved changes.",
+      saveChanges: "Save",
+      discard: "Discard",
+      keepEditing: "Cancel",
+      collectionName: "Collection name",
+      folderName: "Folder name",
+      requestName: "Request name",
+      envCreated: "Environment created",
+      nameRequired: "A name is required",
+      nameTaken: "This name is already in use",
+      notSentYet: "Fix the highlighted fields, then send again.",
+      draftName: "New Request",
+      restoredFromHistory: "Restored snapshot from history (unsaved)",
+      announceSent: "Request sent. Status {status}.",
+      announceFailed: "Request failed: {category}.",
+      announceCancelled: "Request cancelled.",
+      announceSaved: "Request saved.",
+      historyEmptyStatus: "—",
+      confirmSendUnsafe: "Environment \"{env}\" is marked production-like. Send this {method} request?",
+      sendAnyway: "Send anyway",
+      request: "Request",
+      statusHeader: "Status",
+      durationHeader: "Duration",
+      sizeHeader: "Size",
+      timeHeader: "Time",
+    },
+    zh: {
+      booting: "正在启动 API Studio…",
+      appSubtitle: "构建、调试和管理 API 请求",
+      collapseSidebar: "收起侧边栏",
+      showSidebar: "展开侧边栏",
+      newRequest: "+ 新建请求",
+      newCollection: "新建集合",
+      searchPlaceholder: "搜索请求（名称、URL、方法）",
+      collections: "集合",
+      history: "历史",
+      justNow: "刚刚",
+      emptyCollections: "还没有集合。创建一个集合来保存请求。",
+      noSearchResults: "没有匹配的请求。",
+      emptyHistory: "发送过的请求会出现在这里（已脱敏，最多保留 500 条）。",
+      newFolder: "新建文件夹",
+      newRequestIn: "新建请求",
+      rename: "重命名",
+      duplicate: "创建副本",
+      deleteCollection: "删除集合",
+      deleteFolder: "删除文件夹",
+      deleteRequest: "删除请求",
+      clearHistory: "清空",
+      clearHistoryConfirm: "清空全部历史记录？此操作不可撤销。",
+      deleteCollectionConfirm: "删除集合「{name}」及其中的全部内容？",
+      deleteFolderConfirm: "删除文件夹「{name}」及其中的请求？",
+      deleteRequestConfirm: "删除请求「{name}」？",
+      environment: "环境",
+      noEnvironment: "无环境",
+      manageEnvironments: "管理环境",
+      prodBadge: "生产",
+      send: "发送",
+      cancel: "取消",
+      save: "保存",
+      moreActions: "更多操作",
+      copyAsCurl: "复制为 cURL",
+      tabParams: "参数",
+      tabHeaders: "请求头",
+      tabAuth: "认证",
+      tabBody: "请求体",
+      tabSettings: "设置",
+      responseBody: "响应体",
+      responseHeaders: "响应头",
+      responseTiming: "耗时",
+      cookies: "Cookies",
+      noCookies: "该响应中没有 Cookie。",
+      diagnostics: "诊断",
+      timingPanelTitle: "请求耗时",
+      phaseTotal: "总耗时",
+      phaseDns: "DNS 解析",
+      phaseConnect: "建立连接",
+      phaseTls: "TLS 握手",
+      phaseRequest: "发送请求",
+      phaseTtfb: "等待响应（TTFB）",
+      phaseDownload: "接收响应",
+      responseInfo: "响应信息",
+      infoStatus: "状态码",
+      infoSize: "响应大小",
+      infoType: "内容类型",
+      infoServer: "服务器",
+      infoFinalUrl: "最终 URL",
+      infoRedirects: "重定向",
+      redirectCountLabel: "{count} 次重定向",
+      viewText: "文本",
+      viewTree: "树形",
+      prettify: "美化",
+      key: "名称",
+      value: "值",
+      description: "描述",
+      enabled: "启用",
+      addParam: "添加参数",
+      addHeader: "添加请求头",
+      addVariable: "添加变量",
+      rowMenu: "行操作",
+      duplicateRow: "复制该行",
+      deleteRow: "删除该行",
+      authType: "类型",
+      authNone: "无鉴权",
+      authBearer: "Bearer Token",
+      authBasic: "Basic Auth",
+      authApiKey: "API Key",
+      authNoneDesc: "直接发送请求，不添加认证信息。",
+      authBearerDesc: "在 Authorization 请求头中添加 Bearer Token 进行身份认证。",
+      authBasicDesc: "将用户名和密码编码为 Basic Auth 请求头。",
+      authApiKeyDesc: "将 API Key 作为请求头或查询参数发送。",
+      authHint: "提示：可在「环境变量」中配置 Token 等变量，并在多个请求间复用。",
+      goToEnvSettings: "前往环境设置 →",
+      authIn: "添加到",
+      authHeader: "请求头",
+      authQuery: "查询参数",
+      tokenLabel: "Token",
+      usernameLabel: "用户名",
+      passwordLabel: "密码",
+      apiKeyNameLabel: "Key 名称",
+      apiKeyValueLabel: "Key 值",
+      authSessionNote: "此处的凭据值仅在本次会话内有效，绝不写入磁盘。请改用 {{变量}} 或标记为「机密」的环境变量以便复用；凭据类的请求头与查询参数同理。",
+      bodyType: "请求体类型",
+      bodyNone: "无",
+      bodyJson: "JSON",
+      bodyText: "文本",
+      bodyForm: "URL 编码",
+      format: "格式化",
+      minify: "压缩",
+      jsonValid: "JSON 有效",
+      jsonInvalid: "JSON 无效",
+      unresolvedVars: "未解析的变量：{vars}",
+      invalidUrl: "请输入有效的 http(s) URL",
+      settings: "设置",
+      timeout: "超时（毫秒）",
+      followRedirects: "跟随重定向",
+      maxRedirects: "最大重定向次数",
+      verifyTls: "校验 TLS 证书",
+      tlsWarning: "该请求已禁用 TLS 校验。除非明确信任此端点，否则请重新启用。",
+      previewCap: "响应预览上限",
+      sending: "正在发送新请求…",
+      requestCancelled: "请求已取消",
+      errSummary: "请求失败",
+      errNext: "下一步：",
+      nextInvalidUrl: "请检查 URL 格式与协议（http 或 https）。",
+      nextInvalidRequest: "在编辑器中重新创建该请求后再次发送。",
+      nextVariableUnresolved: "请在请求变量或当前环境中定义缺失的变量。",
+      nextDnsFailed: "请检查主机名与网络连接。",
+      nextConnectFailed: "服务端拒绝或中断了连接，请确认主机与端口。",
+      nextTlsFailed: "证书校验失败。请先检查证书，再考虑关闭 TLS 校验。",
+      nextTimeout: "请在设置中提高超时时间，或确认服务是否可达。",
+      nextRequestCancelled: "准备好后可重新发送。",
+      nextTooManyRedirects: "请在设置中提高重定向上限，或修复重定向循环。",
+      nextBodyTooLarge: "请在设置中提高响应预览上限。",
+      nextInternalError: "请重试；若持续失败，请检查 Sidecar 日志。",
+      bodyNotRestored: "请求体不会写入历史记录，需要重新填写。",
+      revealValue: "显示值",
+      hideValue: "隐藏值",
+      expandNode: "展开",
+      urlLabel: "URL",
+      validateJson: "JSON",
+      moreIn: "更多操作",
+      retry: "重试",
+      noResponse: "发送请求后即可在此查看响应。",
+      responseOf: "响应",
+      truncatedNote: "响应超过 {cap} 的预览上限，仅显示前 {shown}。如需完整内容可在设置中提高上限。",
+      binaryBody: "二进制响应（{size}，{type}）— 无文本预览。",
+      collapsed: "还有 {count} 项…",
+      copyValue: "复制值",
+      copyKey: "复制键",
+      copyPath: "复制 JSONPath",
+      setEnvVar: "设为环境变量",
+      setEnvVarDisabled: "截断或超大的值不可设为环境变量",
+      copied: "已复制",
+      copyFailed: "复制失败",
+      envVarSet: "已在 {env} 中设置变量「{name}」",
+      searchJson: "在 JSON 中搜索…",
+      noJsonMatches: "无匹配",
+      timingTotal: "总计",
+      timingNotAvailable: "不可用",
+      timingNote: "Sidecar 目前仅测量总耗时。传输层上报后才会显示其他阶段。",
+      envManagerTitle: "环境管理",
+      envName: "名称",
+      newEnv: "+ 新建环境",
+      noEnvSelected: "选择一个环境以编辑其变量。",
+      prodLike: "类生产环境（显示警告徽标）",
+      confirmUnsafe: "非安全方法（POST/PUT/PATCH/DELETE）发送前确认",
+      secret: "机密",
+      secretNote: "机密值绝不写入磁盘，需要在每次会话中重新输入。",
+      deleteEnv: "删除环境",
+      deleteEnvConfirm: "删除环境「{name}」？",
+      unsavedTitle: "未保存的更改",
+      unsavedMessage: "当前请求有未保存的更改。",
+      saveChanges: "保存",
+      discard: "放弃",
+      keepEditing: "取消",
+      collectionName: "集合名称",
+      folderName: "文件夹名称",
+      requestName: "请求名称",
+      envCreated: "环境已创建",
+      nameRequired: "名称不能为空",
+      nameTaken: "该名称已被使用",
+      notSentYet: "请修正标红的字段后重新发送。",
+      draftName: "新请求",
+      restoredFromHistory: "已从历史恢复快照（未保存）",
+      announceSent: "请求已发送。状态 {status}。",
+      announceFailed: "请求失败：{category}。",
+      announceCancelled: "请求已取消。",
+      announceSaved: "请求已保存。",
+      historyEmptyStatus: "—",
+      confirmSendUnsafe: "环境「{env}」被标记为类生产环境。仍要发送这个 {method} 请求吗？",
+      sendAnyway: "仍然发送",
+      request: "请求",
+      statusHeader: "状态",
+      durationHeader: "耗时",
+      sizeHeader: "大小",
+      timeHeader: "时间",
+    },
+  };
+
+  let lang = "en";
+
+  return {
+    setLocale(locale) {
+      lang = String(locale || "en").toLowerCase().startsWith("zh") ? "zh" : "en";
+    },
+    t(key, params) {
+      let text = (dict[lang] && dict[lang][key]) || dict.en[key] || key;
+      if (params) {
+        for (const [name, value] of Object.entries(params)) {
+          text = text.split("{" + name + "}").join(String(value));
         }
+      }
+      return text;
+    },
+  };
+})();
+
+
+/* ==== js/10-state.js ==== */
+
+/* ==== Application state ==== */
+
+const STATE_VERSION = 1;
+const UNSAFE_METHODS = ["POST", "PUT", "PATCH", "DELETE"];
+
+const State = {
+  version: STATE_VERSION,
+  collections: [],
+  environments: [],
+  settings: {
+    selectedEnvId: null,
+    previewCapBytes: 2 * 1024 * 1024,
+    ui: { sidebarWidth: 288, historyOpen: true, editorH: 46 },
+  },
+  history: [],
+
+  // Editor: the request currently open. `location` is null while the request
+  // is an unsaved draft (never yet written into a collection).
+  current: null, // { requestId, request, collectionId, folderId, dirty }
+  responses: new Map(), // requestId -> normalized response
+  sending: null, // requestId while a request is in flight
+  lastOutcome: null, // { kind: 'error', category, cause } | { kind: 'cancelled' }
+  activeTab: "params",
+  responseTab: "body",
+  search: "",
+  envManagerOpenFor: null,
+};
+
+function defaultRequest() {
+  return {
+    version: 1,
+    name: "",
+    method: "GET",
+    url: "",
+    query: [],
+    headers: [],
+    auth: { type: "none" },
+    body: { type: "none", text: "" },
+    variables: [],
+    settings: {
+      timeoutMs: 30000,
+      followRedirects: true,
+      maxRedirects: 10,
+      verifyTls: true,
+    },
+  };
+}
+
+function newRow(key, value) {
+  return { id: uuid("kv"), key: key || "", value: value || "", description: "", enabled: true };
+}
+
+function newRequestItem(name) {
+  return {
+    id: uuid("req"),
+    type: "request",
+    name: name || I18N.t("draftName"),
+    request: defaultRequest(),
+  };
+}
+
+function newCollection(name) {
+  return { id: uuid("col"), type: "collection", name: name || "Collection", items: [] };
+}
+
+function newEnvironment(name) {
+  return {
+    id: uuid("env"),
+    name: name || "Environment",
+    prodLike: false,
+    confirmUnsafe: true,
+    variables: [],
+  };
+}
+
+const REDACTED = "[REDACTED]";
+
+/** Header names / markers that mark a value as a credential. Kept in sync with
+ * the sidecar's `is_sensitive_header` (backend/src/model.rs). */
+const SENSITIVE_HEADER_MARKERS = ["token", "secret", "api-key", "apikey", "password", "credential"];
+const SENSITIVE_HEADER_NAMES = [
+  "authorization", "proxy-authorization", "cookie", "set-cookie",
+  "x-api-key", "api-key", "apikey", "x-auth-token", "x-access-token", "x-token",
+  "x-csrf-token", "x-xsrf-token", "private-token", "x-amz-security-token",
+  "x-goog-api-key", "x-secret",
+];
+
+function isSensitiveHeaderName(name) {
+  const lower = String(name || "").trim().toLowerCase();
+  if (!lower) return false;
+  if (SENSITIVE_HEADER_NAMES.includes(lower)) return true;
+  return SENSITIVE_HEADER_MARKERS.some((marker) => lower.includes(marker));
+}
+
+const SENSITIVE_QUERY_MARKERS = ["token", "secret", "key", "password", "passwd", "signature", "credential", "auth"];
+
+function isSensitiveQueryName(name) {
+  const lower = String(name || "").trim().toLowerCase();
+  return SENSITIVE_QUERY_MARKERS.some((marker) => lower.includes(marker));
+}
+
+const VARIABLE_NAME_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.";
+
+/** True when the whole string is a single {{name}} reference (a pointer, not a
+ * secret). Only such values survive redaction. */
+function isPlainVariableReference(value) {
+  const trimmed = String(value || "").trim();
+  if (trimmed.length < 5) return false;
+  if (trimmed.slice(0, 2) !== "{{" || trimmed.slice(-2) !== "}}") return false;
+  const name = trimmed.slice(2, -2).trim();
+  if (!name) return false;
+  for (const ch of name) {
+    if (!VARIABLE_NAME_CHARS.includes(ch)) return false;
+  }
+  return true;
+}
+
+function redactCredentialValue(value) {
+  const text = String(value || "");
+  if (!text) return "";
+  return isPlainVariableReference(text) ? text : REDACTED;
+}
+
+/** Drop a `scheme://user:pass@` userinfo section without touching the rest. */
+function stripUrlUserinfo(url) {
+  const schemeAt = url.indexOf("://");
+  if (schemeAt < 0) return url;
+  const authorityStart = schemeAt + 3;
+  let authorityEnd = url.length;
+  for (let i = authorityStart; i < url.length; i++) {
+    const ch = url[i];
+    if (ch === "/" || ch === "?" || ch === "#") {
+      authorityEnd = i;
+      break;
+    }
+  }
+  const authority = url.slice(authorityStart, authorityEnd);
+  const at = authority.lastIndexOf("@");
+  if (at < 0) return url;
+  return url.slice(0, authorityStart) + authority.slice(at + 1) + url.slice(authorityEnd);
+}
+
+/** Redact credential-bearing query values from a URL string, keeping its shape. */
+function redactUrlForHistory(url) {
+  let text = String(url || "");
+  const hashIndex = text.indexOf("#");
+  const hash = hashIndex >= 0 ? text.slice(hashIndex) : "";
+  if (hashIndex >= 0) text = text.slice(0, hashIndex);
+  const qIndex = text.indexOf("?");
+  const base = stripUrlUserinfo(qIndex < 0 ? text : text.slice(0, qIndex));
+  if (qIndex < 0) return base + hash;
+  const redacted = text
+    .slice(qIndex + 1)
+    .split("&")
+    .map((pair) => {
+      const eq = pair.indexOf("=");
+      if (eq < 0) return pair;
+      const key = pair.slice(0, eq);
+      return isSensitiveQueryName(safeDecode(key)) ? key + "=" + REDACTED : pair;
+    })
+    .join("&");
+  return base + "?" + redacted + hash;
+}
+
+/** Auth-bearing fields of a request; these hold directly typed credentials. */
+const AUTH_CREDENTIAL_FIELDS = {
+  bearer: ["token"],
+  basic: ["password"],
+  apikey: ["keyValue"],
+};
+
+/**
+ * Build the persistable copy of a request: credentials are stripped, only
+ * `{{variable}}` references survive. Used for BOTH collection storage and
+ * history snapshots so no save path can bypass redaction (PRD §6.4: a request
+ * never stores resolved secret values).
+ */
+function sanitizeRequestForPersistence(request) {
+  const copy = deepClone(request);
+  const auth = copy.auth || { type: "none" };
+  for (const field of AUTH_CREDENTIAL_FIELDS[auth.type] || []) {
+    auth[field] = redactCredentialValue(auth[field]);
+  }
+  delete auth.reveal;
+  copy.auth = auth;
+
+  copy.variables = (copy.variables || []).map((variable) => ({
+    name: variable.name,
+    secret: !!variable.secret,
+    value: variable.secret ? "" : String(variable.value || ""),
+  }));
+
+  copy.headers = (copy.headers || []).map((row) => ({
+    ...row,
+    value: isSensitiveHeaderName(row.key) ? redactCredentialValue(row.value) : row.value,
+  }));
+
+  copy.query = (copy.query || []).map((row) => ({
+    ...row,
+    value: isSensitiveQueryName(row.key) ? redactCredentialValue(row.value) : row.value,
+  }));
+
+  copy.url = redactUrlForHistory(copy.url);
+  return copy;
+}
+
+/** History snapshot: never carries body text, credentials or resolved values. */
+function redactRequestForHistory(request) {
+  const copy = sanitizeRequestForPersistence(request);
+  const body = copy.body || { type: "none" };
+  const bodyLength = String(body.text || "").length;
+  copy.body = { type: body.type || "none", text: "", redacted: true, sizeBytes: bodyLength };
+  copy.variables = (copy.variables || []).map((variable) => ({ name: variable.name, value: "" }));
+  return copy;
+}
+
+/** Locate an item plus its parent collection/folder. */
+function findItem(id, items = null, parent = null) {
+  const list = items || State.collections;
+  for (const item of list) {
+    if (item.id === id) return { item, parent };
+    if (item.items) {
+      const found = findItem(id, item.items, item);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function findCollectionOf(itemId) {
+  const found = findItem(itemId);
+  if (!found) return null;
+  let node = found.item;
+  let parent = found.parent;
+  while (parent && parent.type !== "collection") {
+    const up = findItem(parent.id);
+    node = parent;
+    parent = up ? up.parent : null;
+  }
+  return parent || (node.type === "collection" ? node : null);
+}
+
+function selectedEnvironment() {
+  if (!State.settings.selectedEnvId) return null;
+  return State.environments.find((env) => env.id === State.settings.selectedEnvId) || null;
+}
+
+/** Total variable scope: request-local wins over environment. */
+function variableScope(request) {
+  const scope = new Map();
+  const env = selectedEnvironment();
+  if (env) {
+    for (const v of env.variables) {
+      scope.set(v.name, { value: v.value, secret: !!v.secret, source: "environment" });
+    }
+  }
+  for (const v of request.variables || []) {
+    scope.set(v.name, { value: v.value, secret: false, source: "request" });
+  }
+  return scope;
+}
+
+/** Persisted state payload — every credential is stripped here (auth values that
+ * are not {{references}}, secret-marked variables, credential headers/query
+ * values), in addition to the sidecar's own scrub of history entries.
+ *
+ * Request bodies are stored as authored: PRD §6.4 lists `body` as part of a
+ * stored request definition, and a body is authored request content rather than
+ * a resolved-credential channel. Credential *channels* (auth fields, credential
+ * named headers/query, secret variables) are the ones that must never persist —
+ * only their `{{variable}}` references survive. History is stricter and keeps no
+ * body text at all (`redactRequestForHistory`). */
+function persistableState() {
+  const environments = State.environments.map((env) => ({
+    ...deepClone(env),
+    variables: env.variables.map((v) => ({
+      name: v.name,
+      secret: !!v.secret,
+      // Secret values are session-only; ordinary variables must survive a restart.
+      value: v.secret ? "" : String(v.value || ""),
+    })),
+  }));
+  const collections = State.collections.map((collection) => sanitizeTree(collection));
+  return {
+    version: STATE_VERSION,
+    collections,
+    environments,
+    settings: deepClone(State.settings),
+  };
+}
+
+/** Recursively copy a collection/folder tree, sanitizing every request. */
+function sanitizeTree(node) {
+  const copy = { ...deepClone(node) };
+  if (Array.isArray(node.items)) {
+    copy.items = node.items.map((item) =>
+      item.type === "request" ? { ...deepClone(item), request: sanitizeRequestForPersistence(item.request) } : sanitizeTree(item),
+    );
+  }
+  return copy;
+}
+
+const scheduleSave = debounce(() => {
+  Api.saveState(persistableState()).catch((error) => {
+    announce("Save failed: " + (error && error.message ? error.message : error));
+  });
+}, 600);
+
+
+/* ==== js/15-rpc.js ==== */
+
+/* ==== Sidecar RPC wrappers (Host Bridge) ==== */
+
+const Api = (() => {
+  function invoke(method, params, options) {
+    return window.dbxPlugin.invoke(method, params, options);
+  }
+
+  return {
+    async request(spec, timeoutMs) {
+      return invoke("api/request", spec, { timeoutMs });
+    },
+    cancel(requestId) {
+      return invoke("api/cancel", { requestId });
+    },
+    exportCurl(spec, timeoutMs) {
+      return invoke("api/export-curl", spec, { timeoutMs });
+    },
+    async loadAll() {
+      const result = await invoke("api/persistence/load", {});
+      return {
+        state: result && result.state ? result.state : null,
+        history: result && Array.isArray(result.history) ? result.history : [],
+      };
+    },
+    saveState(state) {
+      return invoke("api/persistence/save", { state });
+    },
+    historyAppend(entry) {
+      return invoke("api/persistence/history-append", { entry });
+    },
+    historyClear() {
+      return invoke("api/persistence/history-clear", {});
+    },
+  };
+})();
+
+
+/* ==== js/20-variables.js ==== */
+
+/* ==== Variable resolution, validation, request folding ==== */
+
+const VAR_PATTERN = /\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}/g;
+
+/**
+ * Resolve {{name}} references in one string.
+ * - maskSecrets: secret references are kept as {{name}} (used for cURL export)
+ *   instead of being copied into the output.
+ */
+function resolveString(text, scope, maskSecrets) {
+  const unresolved = [];
+  if (typeof text !== "string") return { value: "", unresolved };
+  const value = text.replace(VAR_PATTERN, (whole, name) => {
+    const entry = scope.get(name);
+    if (!entry) {
+      if (!unresolved.includes(name)) unresolved.push(name);
+      return whole;
+    }
+    if (entry.secret) {
+      if (maskSecrets) return "{{" + name + "}}";
+      if (!entry.value) {
+        if (!unresolved.includes(name)) unresolved.push(name);
+        return whole;
+      }
+      return entry.value;
+    }
+    return entry.value;
+  });
+  return { value, unresolved };
+}
+
+/** JSONPath of a node inside the parsed response, e.g. $.store.books[2].title */
+function jsonPathOf(path) {
+  return "$" + path;
+}
+
+function btoaUtf8(text) {
+  return btoa(String.fromCharCode(...new TextEncoder().encode(text)));
+}
+
+const CONTENT_TYPES = {
+  json: "application/json",
+  text: "text/plain",
+  urlencoded: "application/x-www-form-urlencoded",
+};
+
+/**
+ * Fold the editor request into a sidecar request spec:
+ * - resolve variables (maskSecrets=false),
+ * - fold auth into headers/query,
+ * - ensure a body content-type header.
+ * Returns { spec, issues } where issues maps field -> { message, unresolved }.
+ */
+function buildSendSpec(request, requestId, scope, maskSecrets) {
+  const issues = {};
+  const collect = (field, resolved) => {
+    if (resolved.unresolved.length) {
+      issues[field] = { unresolved: resolved.unresolved };
+      return true;
+    }
+    return false;
+  };
+
+  const urlRes = resolveString(request.url, scope, maskSecrets);
+  const badUrl = collect("url", urlRes);
+
+  const headerRows = (request.headers || []).filter((row) => row.enabled && row.key.trim());
+  const headers = [];
+  for (const row of headerRows) {
+    const name = resolveString(row.key, scope, maskSecrets);
+    const value = resolveString(row.value, scope, maskSecrets);
+    if (collect("headers", name) || collect("headers", value)) continue;
+    headers.push({ name: name.value, value: value.value });
+  }
+
+  const auth = request.auth || { type: "none" };
+  const authHeader = (name, value) => {
+    const idx = headers.findIndex((h) => h.name.toLowerCase() === name.toLowerCase());
+    if (idx >= 0) headers.splice(idx, 1);
+    headers.push({ name, value });
+  };
+  const authTypeResolved = auth.type;
+  if (authTypeResolved === "bearer") {
+    const token = resolveString(auth.token || "", scope, maskSecrets);
+    if (!token.value && !collect("auth", token)) {
+      issues.auth = { messageKey: null, empty: true, unresolved: [] };
+    } else if (!collect("auth", token)) {
+      authHeader("Authorization", "Bearer " + token.value);
+    }
+  } else if (authTypeResolved === "basic") {
+    const user = resolveString(auth.username || "", scope, maskSecrets);
+    const pass = resolveString(auth.password || "", scope, maskSecrets);
+    if (!collect("auth", user) && !collect("auth", pass)) {
+      authHeader("Authorization", "Basic " + btoaUtf8(user.value + ":" + pass.value));
+    }
+  } else if (authTypeResolved === "apikey") {
+    const keyName = resolveString(auth.keyName || "", scope, maskSecrets);
+    const keyValue = resolveString(auth.keyValue || "", scope, maskSecrets);
+    if (!collect("auth", keyName) && !collect("auth", keyValue)) {
+      if (auth.in === "query") {
+        if (!badUrl) urlRes.value = appendQueryParam(urlRes.value, keyName.value, keyValue.value);
+      } else {
+        authHeader(keyName.value, keyValue.value);
+      }
+    }
+  }
+
+  let bodyText;
+  const bodyType = (request.body && request.body.type) || "none";
+  if (bodyType !== "none") {
+    const raw = request.body.text || "";
+    const resolvedBody = resolveString(raw, scope, maskSecrets);
+    collect("body", resolvedBody);
+    bodyText = resolvedBody.value;
+    if (bodyType === "json" && bodyText.trim()) {
+      try {
+        JSON.parse(bodyText);
+      } catch {
+        issues.body = issues.body || { unresolved: [] };
+        issues.body.json = true;
+      }
+    }
+    const contentType = CONTENT_TYPES[bodyType] || CONTENT_TYPES.text;
+    if (!headers.some((h) => h.name.toLowerCase() === "content-type")) {
+      headers.push({ name: "Content-Type", value: contentType });
+    }
+  }
+
+  if (!urlRes.value.trim() || badUrl || !isHttpUrl(urlRes.value)) {
+    issues.url = issues.url || { unresolved: urlRes.unresolved };
+    issues.url.invalid = true;
+  }
+
+  const settings = request.settings || {};
+  const spec = {
+    requestId,
+    method: request.method,
+    url: urlRes.value,
+    headers,
+    body: bodyText == null ? { type: "none" } : { type: "raw", text: bodyText },
+    settings: {
+      timeoutMs: clampInt(settings.timeoutMs, 1000, 300000, 30000),
+      followRedirects: settings.followRedirects !== false,
+      maxRedirects: clampInt(settings.maxRedirects, 0, 20, 10),
+      verifyTls: settings.verifyTls !== false,
+      maxBodyBytes: State.settings.previewCapBytes,
+    },
+  };
+  return { spec, issues };
+}
+
+function isHttpUrl(text) {
+  try {
+    const parsed = new URL(text);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function clampInt(value, min, max, fallback) {
+  const num = Number.parseInt(value, 10);
+  if (Number.isNaN(num)) return fallback;
+  return Math.min(max, Math.max(min, num));
+}
+
+function appendQueryParam(urlText, key, value) {
+  const separator = urlText.includes("?") ? "&" : "?";
+  const hashIndex = urlText.indexOf("#");
+  let base = urlText;
+  let hash = "";
+  if (hashIndex >= 0) {
+    base = urlText.slice(0, hashIndex);
+    hash = urlText.slice(hashIndex);
+  }
+  return base + separator + encodeURIComponent(key) + "=" + encodeURIComponent(value) + hash;
+}
+
+/** Query-string sync helpers. The enabled rows and the URL query stay in
+ * agreement; manually authored values are re-imported rather than dropped. */
+function parseUrlQuery(urlText) {
+  const hashIndex = urlText.indexOf("#");
+  const withoutHash = hashIndex >= 0 ? urlText.slice(0, hashIndex) : urlText;
+  const qIndex = withoutHash.indexOf("?");
+  if (qIndex < 0) return { pairs: [], base: withoutHash };
+  const base = withoutHash.slice(0, qIndex);
+  const query = withoutHash.slice(qIndex + 1);
+  const pairs = [];
+  for (const part of query.split("&")) {
+    if (!part) continue;
+    const eq = part.indexOf("=");
+    const rawKey = eq < 0 ? part : part.slice(0, eq);
+    const rawValue = eq < 0 ? "" : part.slice(eq + 1);
+    pairs.push({ key: safeDecode(rawKey), value: safeDecode(rawValue) });
+  }
+  return { pairs, base };
+}
+
+function safeDecode(text) {
+  try {
+    return decodeURIComponent(text.replace(/\+/g, " "));
+  } catch {
+    return text;
+  }
+}
+
+function rebuildUrlQuery(urlText, pairs) {
+  const hashIndex = urlText.indexOf("#");
+  const base = hashIndex >= 0 ? urlText.slice(0, hashIndex) : urlText;
+  const hash = hashIndex >= 0 ? urlText.slice(hashIndex) : "";
+  if (!pairs.length) return base + hash;
+  const query = pairs
+    .map((pair) => encodeURIComponent(pair.key) + "=" + encodeURIComponent(pair.value))
+    .join("&");
+  return base + "?" + query + hash;
+}
+
+function serializeQueryPairs(rows) {
+  return rows.filter((row) => row.enabled).map((row) => ({ key: row.key, value: row.value }));
+}
+
+
+/* ==== js/25-jsonview.js ==== */
+
+/* ==== JSON tree viewer (lazy children, context actions, search) ==== */
+
+const JsonView = (() => {
+  const MAX_RENDER_DEPTH = 200;
+  const PREVIEW_STR = 160;
+  const MAX_SET_VAR_BYTES = 64 * 1024;
+
+  /** Parse the payload and produce a lightweight node tree. */
+  function buildTree(text) {
+    let value;
+    try {
+      value = JSON.parse(text);
+    } catch {
+      return null;
+    }
+    return { root: value };
+  }
+
+  function describe(value) {
+    if (value === null) return { kind: "null", label: "null" };
+    if (Array.isArray(value)) return { kind: "array", label: "[" + value.length + "]" };
+    if (typeof value === "object") {
+      return { kind: "object", label: "{" + Object.keys(value).length + "}" };
+    }
+    if (typeof value === "string") {
+      const preview = value.length > PREVIEW_STR ? value.slice(0, PREVIEW_STR) + "…" : value;
+      return { kind: "string", label: JSON.stringify(preview) };
+    }
+    return { kind: typeof value, label: String(value) };
+  }
+
+  function valueClass(kind) {
+    if (kind === "string") return "jv-string";
+    if (kind === "number") return "jv-number";
+    if (kind === "null" || kind === "boolean") return "jv-literal";
+    return "";
+  }
+
+  function containerEntries(value) {
+    if (Array.isArray(value)) return value.map((v, i) => ({ key: String(i), path: "[" + i + "]", value: v }));
+    return Object.keys(value).map((key) => ({
+      key,
+      path: /^[A-Za-z_$][\w$]*$/.test(key) ? "." + key : "[" + JSON.stringify(key) + "]",
+      value: value[key],
+    }));
+  }
+
+  function matches(nodePath, query) {
+    if (!query) return true;
+    return nodePath.toLowerCase().includes(query.toLowerCase());
+  }
+
+  /**
+   * Render a JSON node as a DOM subtree. Children render lazily on expand so
+   * wide payloads never stall the workbench (PRD NFR: 1 MB JSON < 300 ms).
+   */
+  function renderNode(key, path, value, depth, query, actions) {
+    const info = describe(value);
+    const rowPath = path;
+    const isContainer = info.kind === "object" || info.kind === "array";
+    const row = el("div", { class: "jv-row" + (actions ? " jv-row--clickable" : "") });
+
+    const toggle = isContainer
+      ? el("button", {
+          class: "jv-toggle",
+          "aria-expanded": "false",
+          "aria-label": (key || "root") + " expand",
+          title: "Expand",
+        }, icon("chevron"))
+      : el("span", { class: "jv-toggle" });
+
+    row.append(toggle);
+    if (key !== null && key !== undefined && path !== "$") {
+      row.append(el("span", { class: "jv-key", text: JSON.stringify(key) }), el("span", { class: "jv-punct", text: ": " }));
+    }
+
+    if (!isContainer) {
+      row.append(el("span", { class: valueClass(info.kind), text: info.label }));
+    } else {
+      row.append(
+        el("span", { class: "jv-punct", text: info.kind === "array" ? "[" : "{" }),
+        el("span", { class: "jv-summary", text: info.label }),
+      );
+    }
+
+    const node = el("div", { class: "jv-node" });
+    node.append(row);
+
+    let childrenBox = null;
+    let expanded = false;
+
+    const renderChildren = () => {
+      const entries = containerEntries(value);
+      childrenBox = el("div", { class: "jv-children", role: "group" });
+      if (!entries.length) {
+        childrenBox.append(el("span", {
+          class: "jv-summary",
+          text: info.kind === "array" ? "[]" : "{}",
+        }));
+      }
+      for (const entry of entries) {
+        if (query && !matches(entry.key, query) && depth > MAX_RENDER_DEPTH) continue;
+        childrenBox.append(renderNode(entry.key, rowPath + entry.path, entry.value, depth + 1, query, actions));
+      }
+    };
+
+    const setExpanded = (expand) => {
+      expanded = expand;
+      toggle.setAttribute("aria-expanded", String(expand));
+      if (expand) {
+        if (!childrenBox) renderChildren();
+        if (childrenBox.parentNode !== node) node.append(childrenBox);
+      } else if (childrenBox && childrenBox.parentNode === node) {
+        childrenBox.remove();
+      }
+    };
+
+    if (isContainer) {
+      toggle.addEventListener("click", (event) => {
+        event.stopPropagation();
+        setExpanded(!expanded);
       });
-    </script>
-  </body>
+      // Containers start collapsed except the root's direct children level.
+      if (depth === 0) setExpanded(true);
+    }
+
+    if (actions) {
+      row.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        actions(event, { key: key === undefined ? null : key, path: jsonPathOf(rowPath), value });
+      });
+      row.addEventListener("dblclick", (event) => {
+        actions(event, { key: key === undefined ? null : key, path: jsonPathOf(rowPath), value });
+      });
+    }
+
+    return node;
+  }
+
+  function render(container, text, options) {
+    container.textContent = "";
+    const tree = buildTree(text);
+    if (!tree) return false;
+    const actions = options && options.onNodeAction;
+    container.append(renderNode(null, "$", tree.root, 0, (options && options.query) || "", actions));
+    return true;
+  }
+
+  function canSetAsVariable(value, truncated) {
+    if (truncated) return false;
+    if (value == null) return true;
+    if (typeof value === "object") {
+      try { return JSON.stringify(value).length <= MAX_SET_VAR_BYTES; } catch { return false; }
+    }
+    return String(value).length <= MAX_SET_VAR_BYTES;
+  }
+
+  return { render, buildTree, canSetAsVariable };
+})();
+
+
+/* ==== js/30-kv.js ==== */
+
+/* ==== Key-value row editor (Params / Headers / env variables) ==== */
+
+/**
+ * Render a KV table bound to `rows` (mutated in place; caller persists).
+ * opts: { columns: {description?:bool, secretToggle?:bool}, addLabel,
+ *         rowMenu, onchange, fieldName }
+ */
+function renderKvEditor(container, rows, opts) {
+  container.textContent = "";
+  const showDesc = !opts || !opts.columns || opts.columns.description !== false;
+
+  const head = el("div", { class: "kv__head" },
+    el("span", { text: "" }),
+    el("span", { text: I18N.t("key") }),
+    el("span", { text: I18N.t("value") }),
+    showDesc ? el("span", { text: I18N.t("description") }) : el("span"),
+    el("span", { text: "" }),
+  );
+
+  const table = el("div", { class: "kv" });
+  table.append(head);
+
+  const commit = () => {
+    if (opts && opts.onchange) opts.onchange();
+  };
+
+  if (!rows.length) {
+    const emptyText = opts && opts.emptyText ? opts.emptyText : I18N.t("addParam");
+    table.append(el("div", { class: "kv__empty empty", text: "" },
+      el("span", { text: emptyText }),
+    ));
+  }
+
+  for (const row of rows) {
+    table.append(renderKvRow(row, rows, { showDesc, commit, opts }));
+  }
+
+  const foot = el("div", { class: "kv__foot" },
+    el("button", {
+      class: "btn btn--sm btn--ghost",
+      type: "button",
+      onclick: () => {
+        rows.push(newRow());
+        commit();
+        renderKvEditor(container, rows, opts);
+      },
+    }, icon("plus"), I18N.t(opts && opts.addLabel ? opts.addLabel : "addParam")),
+  );
+  table.append(foot);
+  container.append(table);
+}
+
+function renderKvRow(row, rows, ctx) {
+  const { showDesc, commit, opts } = ctx;
+  const wrap = el("div", { class: "kv-row" + (row.enabled ? "" : " kv-row--disabled") });
+
+  const enabledBox = el("input", { type: "checkbox", "aria-label": I18N.t("enabled") });
+  enabledBox.checked = !!row.enabled;
+  enabledBox.addEventListener("change", () => {
+    row.enabled = enabledBox.checked;
+    commit();
+    rerender();
+  });
+
+  const keyInput = el("input", {
+    class: "kv-input mono",
+    type: "text",
+    spellcheck: "false",
+    "aria-label": I18N.t("key"),
+    placeholder: "key",
+  });
+  keyInput.value = row.key;
+  keyInput.addEventListener("input", () => { row.key = keyInput.value; commit(); });
+
+  const secretToggle = opts && opts.columns && opts.columns.secretToggle;
+  let valueInput;
+  const valueWrap = el("div", { class: "secret-wrap" });
+  const applyMask = () => {
+    valueInput.type = row.secret && !row.reveal ? "password" : "text";
+  };
+  valueInput = el("input", {
+    class: "kv-input mono",
+    type: "text",
+    spellcheck: "false",
+    "aria-label": I18N.t("value"),
+    placeholder: "value",
+  });
+  valueInput.value = row.value;
+  applyMask();
+  valueInput.addEventListener("input", () => { row.value = valueInput.value; commit(); });
+  valueWrap.append(valueInput);
+
+  if (secretToggle) {
+    const revealBtn = el("button", {
+      class: "icon-btn",
+      type: "button",
+      "aria-label": row.reveal ? "Hide value" : "Reveal value",
+      title: row.reveal ? "Hide" : "Reveal",
+      onclick: () => {
+        row.reveal = !row.reveal;
+        applyMask();
+        revealBtn.replaceChildren(icon(row.reveal ? "eyeOff" : "eye"));
+      },
+    }, icon(row.reveal ? "eyeOff" : "eye"));
+    valueWrap.append(revealBtn);
+  }
+
+  const descInput = showDesc
+    ? el("input", {
+        class: "kv-input",
+        type: "text",
+        "aria-label": I18N.t("description"),
+        placeholder: I18N.t("description"),
+      })
+    : null;
+  if (descInput) {
+    descInput.value = row.description || "";
+    descInput.addEventListener("input", () => { row.description = descInput.value; commit(); });
+  }
+
+  const menuBtn = el("button", {
+    class: "icon-btn",
+    type: "button",
+    "aria-label": I18N.t("rowMenu"),
+    title: I18N.t("rowMenu"),
+    "aria-haspopup": "menu",
+    onclick: (event) => openContextMenu(event.currentTarget, [
+      {
+        label: I18N.t("duplicateRow"),
+        action: () => {
+          const index = rows.indexOf(row);
+          rows.splice(index + 1, 0, { ...deepClone(row), id: uuid("kv") });
+          commit();
+          rerender();
+        },
+      },
+      { sep: true },
+      {
+        label: I18N.t("deleteRow"),
+        danger: true,
+        action: () => {
+          const index = rows.indexOf(row);
+          if (index >= 0) rows.splice(index, 1);
+          commit();
+          rerender();
+        },
+      },
+    ]),
+  }, icon("dots"));
+
+  wrap.append(
+    el("label", { class: "checkbox" }, enabledBox),
+    keyInput,
+    valueWrap,
+    showDesc ? descInput : el("span"),
+    el("div", { class: "kv-row__menu" }, menuBtn),
+  );
+
+  function rerender() {
+    if (opts && opts.rerenderAll) {
+      opts.rerenderAll();
+    } else {
+      const fresh = renderKvRow(row, rows, ctx);
+      wrap.replaceWith(fresh);
+    }
+  }
+
+  return wrap;
+}
+
+
+/* ==== js/35-dialogs.js ==== */
+
+/* ==== Dialogs (plugin-styled; native alert/confirm/prompt are forbidden),
+   context menu, and the environment manager ==== */
+
+function closeTopOverlay() {
+  const overlay = document.querySelector(".overlay");
+  if (overlay) {
+    overlay.remove();
+    return true;
+  }
+  return false;
+}
+
+function openDialog(content, { wide, initialFocus } = {}) {
+  const dialog = el("div", { class: "dialog" + (wide ? " dialog--wide" : ""), role: "dialog", "aria-modal": "true" });
+  dialog.append(content);
+  const overlay = el("div", {
+    class: "overlay",
+    onclick: (event) => { if (event.target === overlay) closeDialog(); },
+  }, dialog);
+  overlay.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      closeDialog();
+    }
+  });
+  document.body.append(overlay);
+  function closeDialog() {
+    overlay.remove();
+  }
+  const focusTarget = initialFocus || dialog.querySelector("input, select, textarea, button");
+  if (focusTarget) focusTarget.focus();
+  return { close: closeDialog, dialog };
+}
+
+function promptDialog({ title, label, value, okText, errorText }) {
+  return new Promise((resolve) => {
+    const input = el("input", { class: "input", type: "text", value: value || "", spellcheck: "false" });
+    const error = el("div", { class: "dialog__error", text: errorText || "", hidden: true });
+    let handle;
+    const submit = () => {
+      const text = input.value.trim();
+      if (!text) {
+        error.textContent = I18N.t("nameRequired");
+        error.hidden = false;
+        input.classList.add("input--error");
+        return;
+      }
+      handle.close();
+      resolve(text);
+    };
+    const form = el("form", {},
+      el("h2", { class: "dialog__title", text: title }),
+      el("div", { class: "dialog__field" },
+        el("label", { text: label, for: "dialog-input" }),
+        input,
+        error,
+      ),
+      el("div", { class: "dialog__actions" },
+        el("button", {
+          class: "btn", type: "button", text: I18N.t("keepEditing"),
+          onclick: () => { handle.close(); resolve(null); },
+        }),
+        el("button", { class: "btn btn--primary", type: "submit", text: okText || I18N.t("save") }),
+      ),
+    );
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      submit();
+    });
+    handle = openDialog(form, { initialFocus: input });
+  });
+}
+
+function confirmDialog({ title, message, okText, okClass, cancelText }) {
+  return new Promise((resolve) => {
+    let handle;
+    const panel = el("div", {},
+      el("h2", { class: "dialog__title", text: title }),
+      el("p", { class: "dialog__message", text: message }),
+      el("div", { class: "dialog__actions" },
+        el("button", {
+          class: "btn", type: "button", text: cancelText || I18N.t("keepEditing"),
+          onclick: () => { handle.close(); resolve(false); },
+        }),
+        el("button", {
+          class: "btn " + (okClass || "btn--primary"), type: "button", text: okText || I18N.t("send"),
+          onclick: () => { handle.close(); resolve(true); },
+        }),
+      ),
+    );
+    handle = openDialog(panel);
+  });
+}
+
+/** Unsaved-changes guard: Save / Discard / Cancel (Cancel is the default). */
+function unsavedDialog() {
+  return new Promise((resolve) => {
+    let handle;
+    const cancelBtn = el("button", {
+      class: "btn", type: "button", text: I18N.t("keepEditing"),
+      onclick: () => { handle.close(); resolve("cancel"); },
+    });
+    const panel = el("div", {},
+      el("h2", { class: "dialog__title", text: I18N.t("unsavedTitle") }),
+      el("p", { class: "dialog__message", text: I18N.t("unsavedMessage") }),
+      el("div", { class: "dialog__actions" },
+        el("button", {
+          class: "btn btn--danger", type: "button", text: I18N.t("discard"),
+          onclick: () => { handle.close(); resolve("discard"); },
+        }),
+        el("button", {
+          class: "btn btn--primary", type: "button", text: I18N.t("saveChanges"),
+          onclick: () => { handle.close(); resolve("save"); },
+        }),
+        cancelBtn,
+      ),
+    );
+    handle = openDialog(panel, { initialFocus: cancelBtn });
+  });
+}
+
+/* ---- Context menu ---- */
+
+function closeContextMenu() {
+  const menu = document.querySelector(".menu");
+  if (menu) menu.remove();
+}
+
+function openContextMenu(anchor, items) {
+  closeContextMenu();
+  const menu = el("div", { class: "menu", role: "menu" });
+  for (const item of items) {
+    if (item.sep) {
+      menu.append(el("div", { class: "menu__sep" }));
+      continue;
+    }
+    menu.append(el("button", {
+      class: "menu__item" + (item.danger ? " menu__item--danger" : ""),
+      type: "button",
+      role: "menuitem",
+      text: item.label,
+      disabled: item.disabled || undefined,
+      title: item.title || undefined,
+      onclick: () => {
+        closeContextMenu();
+        item.action();
+      },
+    }));
+  }
+  document.body.append(menu);
+  const rect = anchor.getBoundingClientRect();
+  const menuRect = menu.getBoundingClientRect();
+  let x = rect.left;
+  let y = rect.bottom + 4;
+  if (x + menuRect.width > window.innerWidth - 8) x = window.innerWidth - menuRect.width - 8;
+  if (y + menuRect.height > window.innerHeight - 8) y = rect.top - menuRect.height - 4;
+  menu.style.left = Math.max(8, x) + "px";
+  menu.style.top = Math.max(8, y) + "px";
+  const first = menu.querySelector("button:not(:disabled)");
+  if (first) first.focus();
+}
+
+document.addEventListener("click", (event) => {
+  const menu = document.querySelector(".menu");
+  if (menu && !menu.contains(event.target)) closeContextMenu();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") {
+    closeContextMenu();
+    closeTopOverlay();
+  }
+});
+
+/* ---- Environment manager ---- */
+
+function openEnvironmentManager() {
+  let selectedId = State.settings.selectedEnvId || (State.environments[0] && State.environments[0].id) || null;
+
+  let list, editor, handle;
+  const rerender = () => {
+    renderEnvList();
+    renderEnvEditor();
+  };
+
+  const content = el("div", {},
+    el("h2", { class: "dialog__title", text: I18N.t("envManagerTitle") }),
+    el("div", { class: "env-manager" },
+      el("div", { class: "env-list", id: "env-list" }),
+      el("div", { class: "env-editor", id: "env-editor" }),
+    ),
+    el("div", { class: "dialog__actions" },
+      el("button", {
+        class: "btn", type: "button", text: I18N.t("keepEditing"),
+        onclick: () => { handle.close(); Editor.refreshEnvSelector(); },
+      }),
+    ),
+  );
+
+  handle = openDialog(content, { wide: true });
+
+  function currentEnv() {
+    return State.environments.find((env) => env.id === selectedId) || null;
+  }
+
+  function renderEnvList() {
+    list = content.querySelector("#env-list");
+    list.textContent = "";
+    for (const env of State.environments) {
+      const item = el("button", {
+        class: "env-list__item" + (env.id === selectedId ? " env-list__item--active" : ""),
+        type: "button",
+        onclick: () => { selectedId = env.id; rerender(); },
+      },
+        el("span", { text: env.name, style: "flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" }),
+        env.prodLike ? el("span", { class: "badge badge--prod", text: I18N.t("prodBadge") }) : null,
+      );
+      list.append(item);
+    }
+    list.append(el("div", { style: "padding:6px" },
+      el("button", {
+        class: "btn btn--sm btn--ghost", type: "button",
+        onclick: () => {
+          const env = newEnvironment();
+          State.environments.push(env);
+          selectedId = env.id;
+          scheduleSave();
+          rerender();
+        },
+      }, icon("plus"), I18N.t("newEnv")),
+    ));
+  }
+
+  function renderEnvEditor() {
+    editor = content.querySelector("#env-editor");
+    editor.textContent = "";
+    const env = currentEnv();
+    if (!env) {
+      editor.append(el("div", { class: "empty", text: I18N.t("noEnvSelected") }));
+      return;
+    }
+
+    const nameInput = el("input", { class: "input", type: "text", value: env.name, "aria-label": I18N.t("envName") });
+    nameInput.addEventListener("change", () => {
+      env.name = nameInput.value.trim() || env.name;
+      nameInput.value = env.name;
+      scheduleSave();
+      renderEnvList();
+    });
+
+    const prodBox = el("input", { type: "checkbox" });
+    prodBox.checked = !!env.prodLike;
+    prodBox.addEventListener("change", () => {
+      env.prodLike = prodBox.checked;
+      scheduleSave();
+      renderEnvList();
+      Editor.refreshEnvSelector();
+    });
+
+    const confirmBox = el("input", { type: "checkbox" });
+    confirmBox.checked = env.confirmUnsafe !== false;
+    confirmBox.addEventListener("change", () => {
+      env.confirmUnsafe = confirmBox.checked;
+      scheduleSave();
+    });
+
+    const delBtn = el("button", {
+      class: "btn btn--sm btn--danger", type: "button", text: I18N.t("deleteEnv"),
+      onclick: async () => {
+        const ok = await confirmDialog({
+          title: I18N.t("deleteEnv"),
+          message: I18N.t("deleteEnvConfirm", { name: env.name }),
+          okText: I18N.t("deleteEnv"),
+          okClass: "btn--danger",
+        });
+        if (!ok) return;
+        State.environments = State.environments.filter((e) => e.id !== env.id);
+        if (State.settings.selectedEnvId === env.id) State.settings.selectedEnvId = null;
+        selectedId = State.environments[0] ? State.environments[0].id : null;
+        scheduleSave();
+        rerender();
+        Editor.refreshEnvSelector();
+      },
+    });
+
+    editor.append(
+      el("div", { class: "env-editor__head" },
+        nameInput,
+        delBtn,
+      ),
+      el("label", { class: "checkbox" }, prodBox, el("span", { text: I18N.t("prodLike") })),
+      el("label", { class: "checkbox" }, confirmBox, el("span", { text: I18N.t("confirmUnsafe") })),
+      el("div", { class: "hint", text: I18N.t("secretNote") }),
+    );
+
+    const varsBox = el("div", { class: "env-vars" });
+    editor.append(varsBox);
+
+    const rerenderRows = () => renderEnvVars(env, varsBox, rerenderRows);
+    rerenderRows();
+  }
+
+  function renderEnvVars(env, varsBox, rerenderRows) {
+    varsBox.textContent = "";
+    const rows = env.variables;
+    for (const row of rows) {
+      const nameInput = el("input", {
+        class: "kv-input mono", type: "text", value: row.name,
+        "aria-label": I18N.t("key"), placeholder: "name", spellcheck: "false",
+      });
+      nameInput.addEventListener("input", () => { row.name = nameInput.value; scheduleSave(); });
+
+      const valueInput = el("input", {
+        class: "kv-input mono",
+        type: row.secret && !row.reveal ? "password" : "text",
+        value: row.value,
+        "aria-label": I18N.t("value"), placeholder: "value", spellcheck: "false",
+      });
+      valueInput.addEventListener("input", () => { row.value = valueInput.value; scheduleSave(); });
+
+      const revealBtn = el("button", {
+        class: "icon-btn", type: "button",
+        "aria-label": row.reveal ? "Hide value" : "Reveal value",
+        onclick: () => {
+          row.reveal = !row.reveal;
+          valueInput.type = row.secret && !row.reveal ? "password" : "text";
+          revealBtn.replaceChildren(icon(row.reveal ? "eyeOff" : "eye"));
+        },
+      }, icon(row.reveal ? "eyeOff" : "eye"));
+
+      const secretBox = el("input", { type: "checkbox", "aria-label": I18N.t("secret") });
+      secretBox.checked = !!row.secret;
+      secretBox.addEventListener("change", () => {
+        row.secret = secretBox.checked;
+        scheduleSave();
+      });
+
+      varsBox.append(el("div", { class: "env-var-row" },
+        nameInput,
+        el("div", { class: "secret-wrap", style: "display:flex" }, valueInput, revealBtn),
+        el("label", { class: "checkbox", title: I18N.t("secretNote") }, secretBox, el("span", { class: "hint", text: I18N.t("secret") })),
+        el("span"),
+        el("button", {
+          class: "icon-btn", type: "button", "aria-label": I18N.t("deleteRow"),
+          onclick: () => {
+            rows.splice(rows.indexOf(row), 1);
+            scheduleSave();
+            rerenderRows();
+          },
+        }, icon("trash")),
+      ));
+    }
+    varsBox.append(el("div", { style: "padding:6px 0" },
+      el("button", {
+        class: "btn btn--sm btn--ghost", type: "button",
+        onclick: () => {
+          rows.push({ name: "", value: "", secret: false });
+          scheduleSave();
+          rerenderRows();
+        },
+      }, icon("plus"), I18N.t("addVariable")),
+    ));
+  }
+
+  rerender();
+}
+
+
+/* ==== js/40-sidebar.js ==== */
+
+/* ==== Sidebar: collections tree, search, history ==== */
+
+const Sidebar = (() => {
+  let treeRoot;
+
+  function init() {
+    treeRoot = $("#tree-root");
+    $("#btn-new-request").addEventListener("click", () => Editor.newRequest());
+    $("#btn-new-collection").addEventListener("click", createCollection);
+    $("#search-input").addEventListener("input", (event) => {
+      State.search = event.target.value.trim();
+      render();
+    });
+    render();
+  }
+
+  function refresh() {
+    render();
+  }
+
+  async function createCollection() {
+    const name = await promptDialog({
+      title: I18N.t("newCollection"),
+      label: I18N.t("collectionName"),
+      value: "My Collection",
+      okText: I18N.t("newCollection"),
+    });
+    if (!name) return;
+    State.collections.push(newCollection(name));
+    scheduleSave();
+    render();
+  }
+
+  function matchesSearch(request, text) {
+    if (!text) return true;
+    const haystack = (request.name + " " + request.request.url + " " + request.request.method).toLowerCase();
+    return text.toLowerCase().split(/\s+/).every((term) => haystack.includes(term));
+  }
+
+  function render() {
+    if (!treeRoot) return;
+    treeRoot.textContent = "";
+    const query = State.search;
+
+    const collectionsHead = el("button", {
+      class: "tree-section__head",
+      "aria-expanded": "true",
+      onclick: (event) => toggleSection(event.currentTarget),
+    },
+      icon("folder"),
+      el("span", { text: I18N.t("collections") }),
+    );
+    const collectionsBox = el("div", { class: "tree-section" }, collectionsHead);
+
+    if (!State.collections.length) {
+      collectionsBox.append(el("div", { class: "empty" },
+        el("span", { text: I18N.t("emptyCollections") }),
+        el("button", { class: "btn btn--sm", text: I18N.t("newCollection"), onclick: createCollection }),
+      ));
+    } else if (query) {
+      const hits = renderSearchResults(query);
+      if (!hits) {
+        collectionsBox.append(el("div", { class: "empty", text: I18N.t("noSearchResults") }));
+      }
+    } else {
+      for (const collection of State.collections) {
+        collectionsBox.append(renderCollection(collection));
+      }
+    }
+    treeRoot.append(collectionsBox);
+    treeRoot.append(renderHistorySection());
+  }
+
+  function toggleSection(headButton) {
+    const expanded = headButton.getAttribute("aria-expanded") === "true";
+    headButton.setAttribute("aria-expanded", String(!expanded));
+    let box = headButton.nextElementSibling;
+    while (box) {
+      box.hidden = expanded;
+      box = box.nextElementSibling;
+    }
+  }
+
+  function renderSearchResults(query) {
+    let any = false;
+    const flat = el("div");
+    const visit = (items, parentCollection) => {
+      for (const item of items) {
+        if (item.type === "folder") {
+          visit(item.items, parentCollection);
+        } else if (matchesSearch(item, query)) {
+          any = true;
+          flat.append(renderRequestRow(item, parentCollection));
+        }
+      }
+    };
+    for (const collection of State.collections) {
+      visit(collection.items, collection);
+    }
+    if (any) return flat;
+    return null;
+  }
+
+  function countRequests(items) {
+    let total = 0;
+    for (const item of items) {
+      if (item.type === "request") total++;
+      else if (item.items) total += countRequests(item.items);
+    }
+    return total;
+  }
+
+  function renderCollection(collection) {
+    const expanded = isExpanded(collection.id, true);
+    const head = el("button", {
+      class: "tree-row",
+      "aria-expanded": String(expanded),
+      onclick: () => { toggleExpanded(collection.id); render(); },
+      oncontextmenu: (event) => {
+        event.preventDefault();
+        openCollectionMenu(event, collection);
+      },
+    },
+      icon("folder"),
+      el("span", { class: "name", text: collection.name }),
+      el("span", { class: "tree-count", text: String(countRequests(collection.items)) }),
+      collectionMenuButton(collection),
+    );
+    const children = el("div", { class: "tree-children" });
+    children.hidden = !expanded;
+    for (const item of collection.items) {
+      children.append(item.type === "folder" ? renderFolder(item, collection) : renderRequestRow(item, collection));
+    }
+    if (!collection.items.length) {
+      children.append(el("div", { class: "empty", text: I18N.t("newRequestIn") + " →" }));
+    }
+    return el("div", { class: "tree-section" }, head, children);
+  }
+
+  function collectionMenuButton(collection) {
+    return el("span", { class: "tree-row__actions" },
+      el("button", {
+        class: "icon-btn", type: "button", "aria-label": I18N.t("moreActions"),
+        "aria-haspopup": "menu",
+        onclick: (event) => {
+          event.stopPropagation();
+          openCollectionMenu(event, collection);
+        },
+      }, icon("dots")),
+    );
+  }
+
+  function openCollectionMenu(event, collection) {
+    openContextMenu(event.currentTarget, [
+      { label: I18N.t("newRequestIn"), action: () => Editor.newRequest({ collectionId: collection.id, folderId: null }) },
+      { label: I18N.t("newFolder"), action: () => createFolder(collection, null) },
+      { sep: true },
+      { label: I18N.t("rename"), action: () => renameCollection(collection) },
+      {
+        label: I18N.t("deleteCollection"),
+        danger: true,
+        action: async () => {
+          const ok = await confirmDialog({
+            title: I18N.t("deleteCollection"),
+            message: I18N.t("deleteCollectionConfirm", { name: collection.name }),
+            okText: I18N.t("deleteCollection"),
+            okClass: "btn--danger",
+          });
+          if (!ok) return;
+          State.collections = State.collections.filter((c) => c.id !== collection.id);
+          if (State.current && State.current.collectionId === collection.id) {
+            Editor.markLocationDeleted();
+          }
+          scheduleSave();
+          render();
+        },
+      },
+    ]);
+  }
+
+  async function createFolder(collection, parentFolder) {
+    const name = await promptDialog({
+      title: I18N.t("newFolder"),
+      label: I18N.t("folderName"),
+      value: "Folder",
+      okText: I18N.t("newFolder"),
+    });
+    if (!name) return;
+    const folder = { id: uuid("fld"), type: "folder", name, items: [] };
+    if (parentFolder) parentFolder.items.push(folder);
+    else collection.items.push(folder);
+    scheduleSave();
+    render();
+  }
+
+  function folderMenu(event, folder, collection) {
+    openContextMenu(event.currentTarget, [
+      { label: I18N.t("newRequestIn"), action: () => Editor.newRequest({ collectionId: collection.id, folderId: folder.id }) },
+      { label: I18N.t("newFolder"), action: () => createFolder(collection, folder) },
+      { sep: true },
+      {
+        label: I18N.t("rename"),
+        action: async () => {
+          const name = await promptDialog({
+            title: I18N.t("rename"), label: I18N.t("folderName"), value: folder.name, okText: I18N.t("rename"),
+          });
+          if (name) {
+            folder.name = name;
+            scheduleSave();
+            render();
+          }
+        },
+      },
+      {
+        label: I18N.t("deleteFolder"),
+        danger: true,
+        action: async () => {
+          const ok = await confirmDialog({
+            title: I18N.t("deleteFolder"),
+            message: I18N.t("deleteFolderConfirm", { name: folder.name }),
+            okText: I18N.t("deleteFolder"),
+            okClass: "btn--danger",
+          });
+          if (!ok) return;
+          const owner = findItem(folder.id);
+          if (owner && owner.parent) {
+            owner.parent.items = owner.parent.items.filter((i) => i.id !== folder.id);
+          }
+          scheduleSave();
+          render();
+        },
+      },
+    ]);
+  }
+
+  function renderFolder(folder, collection) {
+    const expanded = isExpanded(folder.id, true);
+    const head = el("button", {
+      class: "tree-row",
+      "aria-expanded": String(expanded),
+      onclick: () => { toggleExpanded(folder.id); render(); },
+      oncontextmenu: (event) => {
+        event.preventDefault();
+        folderMenu(event, folder, collection);
+      },
+    },
+      icon("folder"),
+      el("span", { class: "name", text: folder.name }),
+      el("span", { class: "tree-count", text: String(countRequests(folder.items)) }),
+      el("span", { class: "tree-row__actions" },
+        el("button", {
+          class: "icon-btn", type: "button", "aria-label": I18N.t("moreActions"),
+          "aria-haspopup": "menu",
+          onclick: (event) => {
+            event.stopPropagation();
+            folderMenu(event, folder, collection);
+          },
+        }, icon("dots")),
+      ),
+    );
+    const children = el("div", { class: "tree-children" });
+    children.hidden = !expanded;
+    for (const item of folder.items) {
+      children.append(item.type === "folder" ? renderFolder(item, collection) : renderRequestRow(item, collection));
+    }
+    return el("div", { class: "tree-section" }, head, children);
+  }
+
+  function requestMenu(event, item, collection) {
+    openContextMenu(event.currentTarget, [
+      { label: I18N.t("rename"), action: () => renameRequest(item, collection) },
+      {
+        label: I18N.t("duplicate"),
+        action: () => {
+          const owner = findItem(item.id);
+          const clone = deepClone(item);
+          clone.id = uuid("req");
+          clone.name = item.name + " (copy)";
+          if (owner && owner.parent) owner.parent.items.splice(owner.parent.items.indexOf(item) + 1, 0, clone);
+          else collection.items.push(clone);
+          scheduleSave();
+          render();
+        },
+      },
+      { sep: true },
+      {
+        label: I18N.t("deleteRequest"),
+        danger: true,
+        action: async () => {
+          const ok = await confirmDialog({
+            title: I18N.t("deleteRequest"),
+            message: I18N.t("deleteRequestConfirm", { name: item.name }),
+            okText: I18N.t("deleteRequest"),
+            okClass: "btn--danger",
+          });
+          if (!ok) return;
+          const owner = findItem(item.id);
+          if (owner && owner.parent) {
+            owner.parent.items = owner.parent.items.filter((i) => i.id !== item.id);
+          }
+          if (State.current && State.current.requestId === item.id) {
+            Editor.markLocationDeleted();
+          }
+          scheduleSave();
+          render();
+        },
+      },
+    ]);
+  }
+
+  async function renameCollection(collection) {
+    const name = await promptDialog({
+      title: I18N.t("rename"), label: I18N.t("collectionName"), value: collection.name, okText: I18N.t("rename"),
+    });
+    if (name) {
+      collection.name = name;
+      scheduleSave();
+      render();
+    }
+  }
+
+  async function renameRequest(item, collection) {
+    const name = await promptDialog({
+      title: I18N.t("rename"), label: I18N.t("requestName"), value: item.name, okText: I18N.t("rename"),
+    });
+    if (!name) return;
+    item.name = name;
+    if (State.current && State.current.requestId === item.id) {
+      State.current.request.name = name;
+      Editor.refreshHeader();
+    }
+    scheduleSave();
+    render();
+  }
+
+  function renderRequestRow(item, collection) {
+    const active = State.current && State.current.requestId === item.id;
+    const row = el("button", {
+      class: "tree-row" + (active ? " tree-row--active" : ""),
+      onclick: () => Editor.openRequest(item.id),
+      oncontextmenu: (event) => {
+        event.preventDefault();
+        requestMenu(event, item, collection);
+      },
+      title: item.request.url || item.name,
+    },
+      el("span", { class: "method-text method-text--" + item.request.method, text: item.request.method }),
+      el("span", { class: "name", text: item.name }),
+      el("span", { class: "tree-row__actions" },
+        el("button", {
+          class: "icon-btn", type: "button", "aria-label": I18N.t("moreActions"),
+          "aria-haspopup": "menu",
+          onclick: (event) => {
+            event.stopPropagation();
+            requestMenu(event, item, collection);
+          },
+        }, icon("dots")),
+      ),
+    );
+    return row;
+  }
+
+  function renderHistorySection() {
+    const open = State.settings.ui.historyOpen;
+    const section = el("div", { class: "tree-section" });
+    const head = el("button", {
+      class: "tree-section__head",
+      "aria-expanded": String(open),
+      onclick: () => {
+        State.settings.ui.historyOpen = !open;
+        scheduleSave();
+        render();
+      },
+    },
+      icon("clock"),
+      el("span", { text: I18N.t("history") }),
+      el("span", { class: "tree-section__count", text: String(State.history.length) }),
+      el("span", { class: "tree-section__spacer" }),
+    );
+    if (open && State.history.length) {
+      head.append(el("span", { class: "tree-row__actions" },
+        el("button", {
+          class: "icon-btn", type: "button", "aria-label": I18N.t("clearHistory"),
+          style: "width:24px;height:22px",
+          onclick: async (event) => {
+            event.stopPropagation();
+            const ok = await confirmDialog({
+              title: I18N.t("history"),
+              message: I18N.t("clearHistoryConfirm"),
+              okText: I18N.t("clearHistory"),
+              okClass: "btn--danger",
+            });
+            if (!ok) return;
+            State.history = [];
+            await Api.historyClear().catch(() => {});
+            render();
+          },
+        }, icon("trash")),
+      ));
+    }
+    section.append(head);
+
+    if (open) {
+      if (!State.history.length) {
+        section.append(el("div", { class: "empty", text: I18N.t("emptyHistory") }));
+      } else {
+        const list = el("div");
+        for (const entry of [...State.history].reverse().slice(0, 100)) {
+          list.append(renderHistoryRow(entry));
+        }
+        section.append(list);
+      }
+    }
+    return section;
+  }
+
+  function renderHistoryRow(entry) {
+    const statusClass = entry.status == null
+      ? (entry.error ? "status-dot--err" : "status-dot--cancelled")
+      : "status-dot--" + String(entry.status)[0] + "xx";
+    return el("button", {
+      class: "history-row",
+      onclick: () => Editor.restoreHistoryEntry(entry),
+      title: entry.url,
+    },
+      el("span", { class: "method-text method-text--" + entry.method, text: entry.method }),
+      el("span", { class: "url", text: entry.url || entry.name || "" }),
+      el("span", { class: "meta" },
+        el("span", { class: "status-dot " + statusClass }),
+      ),
+      el("span", { class: "meta", text: timeAgo(entry.timestamp) }),
+    );
+  }
+
+  /* expanded-state helpers keep default-expanded behavior without
+     persisting a full set of toggles. */
+  const collapsed = new Set();
+  function isExpanded(id, defaultOpen) {
+    return defaultOpen ? !collapsed.has(id) : collapsed.has(id);
+  }
+  function toggleExpanded(id) {
+    if (collapsed.has(id)) collapsed.delete(id);
+    else collapsed.add(id);
+  }
+
+  return { init, refresh, render };
+})();
+
+
+/* ==== js/45-editor.js ==== */
+
+/* ==== Request editor: header, command row, tabs, panels ==== */
+
+const Editor = (() => {
+  let urlInput, methodSelect, sendBtn, saveBtn;
+  let renderUrlMirror = () => {};
+  let syncingQuery = false;
+
+  const TABS = [
+    { id: "params", label: "tabParams" },
+    { id: "headers", label: "tabHeaders" },
+    { id: "auth", label: "tabAuth" },
+    { id: "body", label: "tabBody" },
+    { id: "settings", label: "tabSettings" },
+  ];
+
+  function init() {
+    urlInput = $("#url-input");
+    methodSelect = $("#method-select");
+    sendBtn = $("#btn-send");
+    saveBtn = $("#btn-save");
+
+    for (const method of ["GET", "POST", "PUT", "PATCH", "DELETE"]) {
+      methodSelect.append(el("option", { value: method, text: method }));
+    }
+    methodSelect.addEventListener("change", () => {
+      mutateCurrent((request) => { request.method = methodSelect.value; });
+      methodSelect.className = "select method-select method-select--" + methodSelect.value;
+    });
+
+    urlInput.addEventListener("input", () => {
+      mutateCurrent((request) => {
+        request.url = urlInput.value;
+        syncQueryFromUrl(request);
+      }, { skipUrlRefresh: true });
+    });
+    initUrlMirror();
+    sendBtn.addEventListener("click", () => RequestFlow.sendOrCancel());
+    $("#btn-send-caret").addEventListener("click", (event) => openRequestMenu(event));
+    $("#btn-sidebar-collapse").addEventListener("click", () => {
+      State.settings.ui.sidebarCollapsed = true;
+      applySidebarCollapsed();
+      scheduleSave();
+    });
+    $("#btn-sidebar-show").addEventListener("click", () => {
+      State.settings.ui.sidebarCollapsed = false;
+      applySidebarCollapsed();
+      scheduleSave();
+    });
+    saveBtn.addEventListener("click", () => saveCurrent());
+    $("#btn-env-manager").addEventListener("click", openEnvironmentManager);
+    $("#env-select").addEventListener("change", (event) => {
+      State.settings.selectedEnvId = event.target.value || null;
+      scheduleSave();
+      refreshEnvSelector();
+      ResponseView.render();
+    });
+    $("#btn-request-menu").addEventListener("click", (event) => openRequestMenu(event));
+    $("#splitter-response").addEventListener("keydown", splitterKeyNav);
+    $("#splitter-sidebar").addEventListener("keydown", splitterKeyNav);
+
+    initSplitters();
+    applySidebarCollapsed();
+    refreshActionButtons();
+    renderTabs();
+    refreshEnvSelector();
+    refreshHeader();
+    refreshCommandRow();
+  }
+
+  /** Icon-bearing action buttons (shell leaves them empty for i18n safety). */
+  function refreshActionButtons() {
+    sendBtn.replaceChildren(icon("send"), el("span", { text: I18N.t("send") }));
+    saveBtn.replaceChildren(icon("save"), el("span", { text: I18N.t("save") }));
+    $("#btn-send-caret").replaceChildren(icon("chevron"));
+    $("#btn-env-manager").replaceChildren(icon("globe"));
+    $("#btn-sidebar-collapse").replaceChildren(icon("chevronsLeft"));
+    $("#btn-sidebar-show").replaceChildren(icon("chevronsRight"));
+    $("#btn-request-menu").replaceChildren(icon("dots"));
+    const envButton = $("#btn-env-manager");
+    envButton.title = I18N.t("manageEnvironments");
+    envButton.setAttribute("aria-label", I18N.t("manageEnvironments"));
+  }
+
+  function applySidebarCollapsed() {
+    $(".app").classList.toggle("app--sidebar-collapsed", !!State.settings.ui.sidebarCollapsed);
+    $("#btn-sidebar-show").hidden = !State.settings.ui.sidebarCollapsed;
+  }
+
+  /* ---- URL variable highlighting (mirror under a transparent-text input) ---- */
+
+  function initUrlMirror() {
+    const mirror = $("#url-mirror");
+    const wrap = $("#url-wrap");
+    renderUrlMirror = () => {
+      const text = urlInput.value;
+      const fragment = document.createDocumentFragment();
+      let lastIndex = 0;
+      text.replace(VAR_PATTERN, (match, name, offset) => {
+        if (offset > lastIndex) fragment.append(document.createTextNode(text.slice(lastIndex, offset)));
+        fragment.append(el("span", { class: "url-var", text: match }));
+        lastIndex = offset + match.length;
+        return match;
+      });
+      if (lastIndex < text.length) fragment.append(document.createTextNode(text.slice(lastIndex)));
+      mirror.replaceChildren(fragment);
+      mirror.scrollLeft = urlInput.scrollLeft;
+    };
+    urlInput.addEventListener("scroll", () => { mirror.scrollLeft = urlInput.scrollLeft; });
+    wrap.dataset.mirrorReady = "1";
+  }
+
+  /* ---- splitters ---- */
+
+  function initSplitters() {
+    const sidebarSplitter = $("#splitter-sidebar");
+    const responseSplitter = $("#splitter-response");
+    const app = $(".app");
+    const mainCol = $(".main-col");
+
+    dragSplitter(sidebarSplitter, (event) => {
+      const width = Math.min(440, Math.max(220, event.clientX));
+      State.settings.ui.sidebarWidth = width;
+      app.style.setProperty("--sidebar-w", width + "px");
+    }, () => {
+      app.style.setProperty("--sidebar-w", State.settings.ui.sidebarWidth + "px");
+      scheduleSave();
+    });
+
+    dragSplitter(responseSplitter, (event) => {
+      const rect = mainCol.getBoundingClientRect();
+      const ratio = ((event.clientY - rect.top) / rect.height) * 100;
+      const clamped = Math.min(80, Math.max(20, ratio));
+      State.settings.ui.editorH = clamped;
+      mainCol.style.setProperty("--editor-h", clamped + "%");
+    }, () => {
+      mainCol.style.setProperty("--editor-h", State.settings.ui.editorH + "%");
+      scheduleSave();
+    });
+
+    app.style.setProperty("--sidebar-w", (State.settings.ui.sidebarWidth || 288) + "px");
+    mainCol.style.setProperty("--editor-h", (State.settings.ui.editorH || 46) + "%");
+  }
+
+  function dragSplitter(handle, onMove, onEnd) {
+    handle.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      handle.classList.add("splitter--active");
+      handle.setPointerCapture(event.pointerId);
+      const move = (moveEvent) => onMove(moveEvent);
+      const up = (upEvent) => {
+        handle.classList.remove("splitter--active");
+        handle.releasePointerCapture(upEvent.pointerId);
+        handle.removeEventListener("pointermove", move);
+        handle.removeEventListener("pointerup", up);
+        if (onEnd) onEnd();
+      };
+      handle.addEventListener("pointermove", move);
+      handle.addEventListener("pointerup", up);
+    });
+  }
+
+  function splitterKeyNav(event) {
+    const mainCol = $(".main-col");
+    const step = event.shiftKey ? 8 : 2;
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    event.preventDefault();
+    if (event.currentTarget.id === "splitter-sidebar") {
+      const delta = event.key === "ArrowLeft" ? -step : step;
+      State.settings.ui.sidebarWidth = Math.min(440, Math.max(220, State.settings.ui.sidebarWidth + delta));
+      $(".app").style.setProperty("--sidebar-w", State.settings.ui.sidebarWidth + "px");
+    } else {
+      const delta = (event.key === "ArrowUp" ? -step : step) * 0.6;
+      State.settings.ui.editorH = Math.min(80, Math.max(20, State.settings.ui.editorH + delta));
+      mainCol.style.setProperty("--editor-h", State.settings.ui.editorH + "%");
+    }
+    scheduleSave();
+  }
+
+  /* ---- current request plumbing ---- */
+
+  function currentRequest() {
+    return State.current ? State.current.request : null;
+  }
+
+  /** Mutate the current request, mark dirty, refresh dependent UI. */
+  function mutateCurrent(fn, options = {}) {
+    const request = currentRequest();
+    if (!request) return;
+    fn(request);
+    State.current.dirty = true;
+    if (!options.skipUrlRefresh) refreshCommandRow();
+    refreshHeader();
+    refreshTabs();
+    saveBtn.disabled = false;
+  }
+
+  function refreshHeader() {
+    const crumb = $("#breadcrumb");
+    crumb.textContent = "";
+    if (!State.current) return;
+    crumb.append(icon("home"));
+    const collection = State.current.collectionId
+      ? State.collections.find((c) => c.id === State.current.collectionId) : null;
+    const folder = State.current.folderId && collection
+      ? findItem(State.current.folderId) : null;
+    if (collection) {
+      crumb.append(el("span", { class: "crumb-dim", text: collection.name }));
+      crumb.append(el("span", { class: "crumb-dim", text: "/" }));
+    }
+    if (folder && folder.item) {
+      crumb.append(el("span", { class: "crumb-dim", text: folder.item.name }));
+      crumb.append(el("span", { class: "crumb-dim", text: "/" }));
+    }
+    crumb.append(el("span", { class: "crumb-name", text: State.current.request.name || I18N.t("draftName") }));
+    if (State.current.dirty) {
+      crumb.append(el("span", { class: "dirty-mark", text: "*", "aria-label": "Unsaved changes", title: I18N.t("unsavedTitle") }));
+    }
+    crumb.append(el("button", {
+      class: "icon-btn crumb-rename", type: "button",
+      "aria-label": I18N.t("rename"), title: I18N.t("rename"),
+      onclick: () => renameCurrent(),
+    }, icon("pencil")));
+  }
+
+  async function renameCurrent() {
+    if (!State.current) return;
+    const name = await promptDialog({
+      title: I18N.t("rename"),
+      label: I18N.t("requestName"),
+      value: State.current.request.name || I18N.t("draftName"),
+      okText: I18N.t("rename"),
+    });
+    if (!name) return;
+    mutateCurrent((request) => { request.name = name; });
+    scheduleSave();
+    Sidebar.refresh();
+  }
+
+  function refreshCommandRow() {
+    const request = currentRequest();
+    if (!request) return;
+    if (document.activeElement !== urlInput) {
+      urlInput.value = request.url;
+    }
+    renderUrlMirror();
+    methodSelect.value = request.method;
+    methodSelect.className = "select method-select method-select--" + request.method;
+    const tlsOff = request.settings && request.settings.verifyTls === false;
+    let badge = $("#tls-badge");
+    if (tlsOff) {
+      if (!badge) {
+        badge = el("span", { class: "badge badge--warn", id: "tls-badge", text: "TLS" });
+        $("#method-select").before(badge);
+      }
+      badge.hidden = false;
+    } else if (badge) {
+      badge.hidden = true;
+    }
+  }
+
+  function refreshEnvSelector() {
+    const select = $("#env-select");
+    select.textContent = "";
+    select.append(el("option", { value: "", text: I18N.t("noEnvironment") }));
+    for (const env of State.environments) {
+      select.append(el("option", { value: env.id, text: env.name }));
+    }
+    select.value = State.settings.selectedEnvId || "";
+    const env = selectedEnvironment();
+    const badge = $("#env-prod-badge");
+    badge.hidden = !(env && env.prodLike);
+    ResponseView.render();
+  }
+
+  function refreshTabs() {
+    const request = currentRequest();
+    const tabbar = $("#editor-tabs");
+    tabbar.textContent = "";
+    if (!request) return;
+    const counts = {
+      params: (request.query || []).filter((r) => r.enabled).length,
+      headers: (request.headers || []).filter((r) => r.enabled).length,
+    };
+    for (const tab of TABS) {
+      const button = el("button", {
+        class: "tab", role: "tab",
+        "aria-selected": String(State.activeTab === tab.id),
+        onclick: () => { State.activeTab = tab.id; renderTabs(); renderPanel(); },
+      },
+        el("span", { text: I18N.t(tab.label) }),
+      );
+      if (counts[tab.id]) button.append(el("span", { class: "tab__count", text: String(counts[tab.id]) }));
+      tabbar.append(button);
+    }
+  }
+
+  function renderTabs() {
+    refreshTabs();
+    renderPanel();
+  }
+
+  /* ---- panels ---- */
+
+  function renderPanel() {
+    const panel = $("#editor-panel");
+    panel.textContent = "";
+    const request = currentRequest();
+    if (!request) return;
+    if (State.activeTab === "params") renderParamsPanel(panel, request);
+    else if (State.activeTab === "headers") renderHeadersPanel(panel, request);
+    else if (State.activeTab === "auth") renderAuthPanel(panel, request);
+    else if (State.activeTab === "body") renderBodyPanel(panel, request);
+    else if (State.activeTab === "settings") renderSettingsPanel(panel, request);
+  }
+
+  const rerenderAllRows = () => renderPanel();
+
+  function renderParamsPanel(panel, request) {
+    if (!request.query.length) request.query.push(newRow());
+    const box = el("div", { class: "panel-stack" });
+    renderKvEditor(box, request.query, {
+      addLabel: "addParam",
+      rerenderAll: rerenderAllRows,
+      onchange: () => {
+        syncUrlFromQuery(request);
+        mutateCurrent(() => {}, { skipUrlRefresh: true });
+      },
+    });
+    panel.append(box);
+  }
+
+  function renderHeadersPanel(panel, request) {
+    if (!request.headers.length) request.headers.push(newRow());
+    const box = el("div", { class: "panel-stack" });
+    renderKvEditor(box, request.headers, {
+      addLabel: "addHeader",
+      rerenderAll: rerenderAllRows,
+      onchange: () => mutateCurrent(() => {}, { skipUrlRefresh: true }),
+    });
+    panel.append(box);
+  }
+
+  const AUTH_TYPES = [
+    { id: "none", label: "authNone", desc: "authNoneDesc", icon: "slash" },
+    { id: "apikey", label: "authApiKey", desc: "authApiKeyDesc", icon: "keyIcon" },
+    { id: "bearer", label: "authBearer", desc: "authBearerDesc", icon: "shield" },
+    { id: "basic", label: "authBasic", desc: "authBasicDesc", icon: "user" },
+  ];
+
+  function renderAuthPanel(panel, request) {
+    const auth = request.auth;
+    const rail = el("div", { class: "auth-rail", role: "tablist", "aria-label": I18N.t("authType") });
+    const detail = el("div", { class: "auth-detail" });
+
+    const renderDetail = () => {
+      detail.textContent = "";
+      const meta = AUTH_TYPES.find((t) => t.id === auth.type) || AUTH_TYPES[0];
+      detail.append(
+        el("h3", { class: "auth-detail__title", text: I18N.t(meta.label) }),
+        el("p", { class: "auth-detail__desc", text: I18N.t(meta.desc) }),
+      );
+
+      const field = (labelKey, key, secret) => {
+        const input = el("input", {
+          class: "input mono", type: secret && !auth.reveal ? "password" : "text",
+          value: auth[key] || "", spellcheck: "false",
+          "aria-label": I18N.t(labelKey),
+        });
+        input.addEventListener("input", () => {
+          mutateCurrent((req) => { req.auth[key] = input.value; });
+        });
+        detail.append(el("div", { class: "auth-detail__field" },
+          el("label", { text: I18N.t(labelKey) }),
+          el("div", { class: "secret-wrap", style: "display:flex" },
+            input,
+            secret
+              ? el("button", {
+                  class: "icon-btn", type: "button", style: "width:28px",
+                  "aria-label": auth.reveal ? "Hide value" : "Reveal value",
+                  onclick: () => {
+                    auth.reveal = !auth.reveal;
+                    renderDetail();
+                  },
+                }, icon(auth.reveal ? "eyeOff" : "eye"))
+              : null,
+          ),
+        ));
+      };
+
+      if (auth.type === "bearer") field("tokenLabel", "token", true);
+      if (auth.type === "basic") {
+        field("usernameLabel", "username", false);
+        field("passwordLabel", "password", true);
+      }
+      if (auth.type === "apikey") {
+        field("apiKeyNameLabel", "keyName", false);
+        field("apiKeyValueLabel", "keyValue", true);
+        const inSelect = el("select", { class: "select", "aria-label": I18N.t("authIn") });
+        for (const [value, label] of [["header", "authHeader"], ["query", "authQuery"]]) {
+          const option = el("option", { value, text: I18N.t(label) });
+          if ((auth.in || "header") === value) option.selected = true;
+          inSelect.append(option);
+        }
+        inSelect.addEventListener("change", () => {
+          mutateCurrent((req) => { req.auth.in = inSelect.value; });
+        });
+        detail.append(el("div", { class: "auth-detail__field" },
+          el("label", { text: I18N.t("authIn") }), inSelect));
+      }
+
+      if (auth.type !== "none") {
+        detail.append(
+          el("div", { class: "auth-hint" },
+            icon("info"),
+            el("span", { text: I18N.t("authHint") }),
+            el("button", {
+              class: "link-btn", type: "button", text: I18N.t("goToEnvSettings"),
+              onclick: openEnvironmentManager,
+            }),
+          ),
+          el("p", { class: "hint auth-session-note", text: I18N.t("authSessionNote") }),
+        );
+      }
+    };
+
+    for (const type of AUTH_TYPES) {
+      const selected = auth.type === type.id;
+      rail.append(el("button", {
+        class: "auth-rail__item",
+        role: "tab",
+        "aria-selected": String(selected),
+        onclick: () => {
+          if (auth.type === type.id) return;
+          mutateCurrent((req) => { req.auth.type = type.id; });
+          renderPanel();
+        },
+      },
+        icon(type.icon),
+        el("span", { text: I18N.t(type.label) }),
+      ));
+    }
+
+    renderDetail();
+    panel.append(el("div", { class: "auth-layout" }, rail, detail));
+  }
+
+  let bodyGutter, bodyArea;
+
+  function renderBodyPanel(panel, request) {
+    const typeSelect = el("select", { class: "select", "aria-label": I18N.t("bodyType") });
+    for (const [value, label] of [["none", "bodyNone"], ["json", "bodyJson"], ["text", "bodyText"], ["urlencoded", "bodyForm"]]) {
+      const option = el("option", { value, text: I18N.t(label) });
+      if ((request.body.type || "none") === value) option.selected = true;
+      typeSelect.append(option);
+    }
+    typeSelect.addEventListener("change", () => {
+      mutateCurrent((req) => {
+        req.body.type = typeSelect.value;
+        if (typeSelect.value === "urlencoded" && !req.body.rows) req.body.rows = [];
+      });
+      renderPanel();
+    });
+
+    const toolbar = el("div", { class: "body-toolbar" },
+      el("label", { class: "hint", text: I18N.t("bodyType") }),
+      typeSelect,
+      el("span", { class: "spacer" }),
+    );
+
+    if (request.body.type === "none") {
+      panel.append(toolbar);
+      return;
+    }
+
+    if (State.current && State.current.bodyRedacted) {
+      panel.append(el("div", { class: "truncate-note", role: "status" },
+        icon("info"),
+        el("span", { text: I18N.t("bodyNotRestored") }),
+      ));
+      State.current.bodyRedacted = false;
+    }
+
+    if (request.body.type === "urlencoded") {
+      panel.append(toolbar);
+      if (!request.body.rows) request.body.rows = [];
+      if (!request.body.rows.length) request.body.rows.push(newRow());
+      const box = el("div", { class: "panel-stack" });
+      renderKvEditor(box, request.body.rows, {
+        addLabel: "addParam",
+        rerenderAll: rerenderAllRows,
+        onchange: () => {
+          mutateCurrent((req) => {
+            req.body.text = request.body.rows
+              .filter((r) => r.enabled && r.key)
+              .map((r) => encodeURIComponent(r.key) + "=" + encodeURIComponent(r.value))
+              .join("&");
+          }, { skipUrlRefresh: true });
+        },
+      });
+      panel.append(box);
+      return;
+    }
+
+    if (request.body.type === "json") {
+      const formatBtn = el("button", { class: "btn btn--sm", text: I18N.t("format"), onclick: () => formatBody(true) });
+      const minifyBtn = el("button", { class: "btn btn--sm", text: I18N.t("minify"), onclick: () => formatBody(false) });
+      toolbar.append(formatBtn, minifyBtn);
+    }
+
+    bodyGutter = el("div", { class: "body-gutter", "aria-hidden": "true" });
+    bodyArea = el("textarea", {
+      class: "body-textarea",
+      spellcheck: "false",
+      "aria-label": I18N.t("tabBody"),
+      placeholder: request.body.type === "json" ? '{ "key": "value" }' : "",
+    });
+    bodyArea.value = request.body.text || "";
+    bodyArea.addEventListener("input", () => {
+      mutateCurrent((req) => { req.body.text = bodyArea.value; });
+      updateGutter();
+      if (request.body.type === "json") updateJsonStatus(request.body.text);
+    });
+    bodyArea.addEventListener("scroll", () => {
+      bodyGutter.scrollTop = bodyArea.scrollTop;
+    });
+    bodyArea.addEventListener("keydown", (event) => {
+      if (event.key === "Tab") {
+        event.preventDefault();
+        const start = bodyArea.selectionStart;
+        bodyArea.setRangeText("  ", start, bodyArea.selectionEnd, "end");
+        mutateCurrent((req) => { req.body.text = bodyArea.value; });
+      }
+    });
+
+    const wrap = el("div", { class: "body-editor-wrap" },
+      el("div", { class: "body-editor" }, bodyGutter, bodyArea),
+    );
+    panel.append(toolbar, wrap);
+    const status = el("div", { class: "field-error", id: "json-status", role: "status", hidden: request.body.type !== "json" });
+    panel.append(status);
+    updateGutter();
+    if (request.body.type === "json") updateJsonStatus(request.body.text);
+  }
+
+  function updateGutter() {
+    if (!bodyGutter || !bodyArea) return;
+    const lines = bodyArea.value.split("\n").length;
+    bodyGutter.textContent = "";
+    const frag = document.createDocumentFragment();
+    for (let i = 1; i <= lines; i++) {
+      frag.append(document.createTextNode(i + "\n"));
+    }
+    bodyGutter.append(frag);
+    bodyGutter.scrollTop = bodyArea.scrollTop;
+  }
+
+  function updateJsonStatus(text) {
+    const status = $("#json-status");
+    if (!status) return;
+    status.hidden = false;
+    const trimmed = (text || "").trim();
+    if (!trimmed) {
+      status.replaceChildren();
+      status.hidden = true;
+      return;
+    }
+    try {
+      JSON.parse(trimmed);
+      status.classList.remove("field-error");
+      status.replaceChildren(icon("check"), el("span", { text: I18N.t("jsonValid") }));
+    } catch (error) {
+      status.classList.add("field-error");
+      status.replaceChildren(
+        icon("alert"),
+        el("span", { text: I18N.t("jsonInvalid") + " — " + error.message }),
+      );
+    }
+  }
+
+  function formatBody(pretty) {
+    const request = currentRequest();
+    if (!request || request.body.type !== "json") return;
+    try {
+      const parsed = JSON.parse(request.body.text || "");
+      const text = pretty ? JSON.stringify(parsed, null, 2) : JSON.stringify(parsed);
+      request.body.text = text;
+      State.current.dirty = true;
+      renderPanel();
+    } catch {
+      announce(I18N.t("jsonInvalid"));
+    }
+  }
+
+  function renderSettingsPanel(panel, request) {
+    const settings = request.settings;
+    const grid = el("div", { class: "settings-grid" });
+
+    const numberField = (labelKey, key, min, max) => {
+      const input = el("input", { class: "input", type: "number", value: settings[key], min, max, "aria-label": I18N.t(labelKey) });
+      input.addEventListener("change", () => {
+        mutateCurrent((req) => { req.settings[key] = clampInt(input.value, min, max, settings[key]); input.value = req.settings[key]; });
+      });
+      grid.append(el("label", { class: "hint", text: I18N.t(labelKey) }), input);
+    };
+    const boolField = (labelKey, key, onChange) => {
+      const box = el("input", { type: "checkbox" });
+      box.checked = settings[key] !== false;
+      box.addEventListener("change", () => {
+        mutateCurrent((req) => { req.settings[key] = box.checked; });
+        if (onChange) onChange();
+      });
+      grid.append(el("span"), el("label", { class: "checkbox" }, box, el("span", { text: I18N.t(labelKey) })));
+    };
+
+    numberField("timeout", "timeoutMs", 1000, 300000);
+    boolField("followRedirects", "followRedirects");
+    numberField("maxRedirects", "maxRedirects", 0, 20);
+    boolField("verifyTls", "verifyTls", () => {
+      refreshCommandRow();
+      const warning = panel.querySelector(".tls-warning");
+      if (warning) warning.hidden = settings.verifyTls !== false;
+    });
+
+    panel.append(grid);
+
+    const warning = el("div", {
+      class: "tls-warning truncate-note", role: "alert",
+      hidden: settings.verifyTls !== false,
+      text: "⚠ " + I18N.t("tlsWarning"),
+    });
+    panel.append(warning);
+  }
+
+  /* ---- URL ↔ params sync ---- */
+
+  function syncQueryFromUrl(request) {
+    if (syncingQuery) return;
+    syncingQuery = true;
+    const { pairs } = parseUrlQuery(request.url);
+    const disabledRows = request.query.filter((row) => !row.enabled);
+    request.query = pairs.map((pair) => newRow(pair.key, pair.value)).concat(disabledRows);
+    syncingQuery = false;
+    if (State.activeTab === "params") renderPanel();
+    refreshTabs();
+  }
+
+  function syncUrlFromQuery(request) {
+    if (syncingQuery) return;
+    syncingQuery = true;
+    request.url = rebuildUrlQuery(request.url, serializeQueryPairs(request.query));
+    syncingQuery = false;
+    refreshCommandRow();
+  }
+
+  /* ---- actions ---- */
+
+  function openRequestMenu(event) {
+    openContextMenu(event.currentTarget, [
+      { label: I18N.t("copyAsCurl"), action: () => RequestFlow.copyCurl() },
+      { sep: true },
+      { label: I18N.t("save"), action: () => saveCurrent() },
+    ]);
+  }
+
+  async function saveCurrent() {
+    const current = State.current;
+    if (!current) return;
+    const item = findItem(current.requestId);
+    if (item && item.item) {
+      item.item.request = deepClone(current.request);
+      item.item.name = current.request.name || item.item.name;
+    } else {
+      // Draft: attach to the target (or first) collection.
+      let collection = State.collections.find((c) => c.id === current.collectionId)
+        || State.collections[0];
+      if (!collection) {
+        collection = newCollection("My Collection");
+        State.collections.push(collection);
+      }
+      let parentItems = collection.items;
+      if (current.folderId) {
+        const folder = findItem(current.folderId);
+        if (folder && folder.item && folder.item.type === "folder") parentItems = folder.item.items;
+      }
+      const newItem = {
+        id: current.requestId,
+        type: "request",
+        name: current.request.name || I18N.t("draftName"),
+        request: deepClone(current.request),
+      };
+      parentItems.push(newItem);
+      current.collectionId = collection.id;
+    }
+    current.dirty = false;
+    current.request.name = current.request.name || I18N.t("draftName");
+    saveBtn.disabled = true;
+    scheduleSave();
+    Sidebar.refresh();
+    refreshHeader();
+    announce(I18N.t("announceSaved"), true);
+  }
+
+  /** Ask what to do about unsaved changes. Returns 'save' | 'discard' | 'cancel'. */
+  async function guardUnsaved() {
+    if (!State.current || !State.current.dirty) return "discard";
+    return unsavedDialog();
+  }
+
+  function newRequest(location) {
+    const id = uuid("req");
+    const request = defaultRequest();
+    request.name = I18N.t("draftName");
+    State.current = {
+      requestId: id,
+      request,
+      collectionId: (location && location.collectionId) || null,
+      folderId: (location && location.folderId) || null,
+      dirty: true,
+      isNew: true,
+    };
+    State.lastOutcome = null;
+    State.activeTab = "params";
+    renderAll();
+    urlInput.focus();
+  }
+
+  async function openRequest(itemId) {
+    if (State.current && State.current.requestId === itemId) return;
+    const guard = await guardUnsaved();
+    if (guard === "cancel") return;
+    if (guard === "save") await saveCurrent();
+    const found = findItem(itemId);
+    if (!found || found.item.type !== "request") return;
+    const collection = findCollectionOf(itemId);
+    const folder = found.parent && found.parent.type === "folder" ? found.parent : null;
+    State.current = {
+      requestId: itemId,
+      request: deepClone(found.item.request),
+      collectionId: collection ? collection.id : null,
+      folderId: folder ? folder.id : null,
+      dirty: false,
+      isNew: false,
+    };
+    State.lastOutcome = null;
+    renderAll();
+  }
+
+  async function restoreHistoryEntry(entry) {
+    const guard = await guardUnsaved();
+    if (guard === "cancel") return;
+    if (guard === "save") await saveCurrent();
+    const request = deepClone(entry.request);
+    request.name = entry.name || request.name || entry.url;
+    // Body text is never persisted in history (PRD §6.4); tell the user rather
+    // than silently presenting a request with an empty body.
+    const bodyRedacted = !!(request.body && request.body.redacted);
+    if (bodyRedacted) {
+      request.body = { type: request.body.type || "none", text: "" };
+    }
+    State.current = {
+      requestId: uuid("req"),
+      request,
+      collectionId: null,
+      folderId: null,
+      dirty: true,
+      isNew: true,
+      bodyRedacted,
+    };
+    State.lastOutcome = null;
+    renderAll();
+    announce(
+      bodyRedacted
+        ? I18N.t("restoredFromHistory") + ". " + I18N.t("bodyNotRestored")
+        : I18N.t("restoredFromHistory"),
+      true,
+    );
+    if (bodyRedacted) toast(I18N.t("bodyNotRestored"));
+  }
+
+  /** Collection/folder containing the open request was deleted. */
+  function markLocationDeleted() {
+    if (!State.current) return;
+    State.current.collectionId = null;
+    State.current.folderId = null;
+    State.current.isNew = true;
+    State.current.dirty = true;
+    refreshHeader();
+    saveBtn.disabled = false;
+  }
+
+  function renderAll() {
+    Sidebar.refresh();
+    refreshHeader();
+    refreshCommandRow();
+    refreshEnvSelector();
+    refreshTabs();
+    renderPanel();
+    saveBtn.disabled = !(State.current && State.current.dirty);
+    ResponseView.render();
+  }
+
+  return {
+    init,
+    renderAll,
+    renderPanel,
+    refreshHeader,
+    refreshEnvSelector,
+    refreshTabs,
+    refreshActionButtons,
+    mutateCurrent,
+    currentRequest,
+    saveCurrent,
+    guardUnsaved,
+    newRequest,
+    openRequest,
+    restoreHistoryEntry,
+    markLocationDeleted,
+    formatBody,
+    get urlInput() { return urlInput; },
+  };
+})();
+
+
+/* ==== js/50-response.js ==== */
+
+/* ==== Send/cancel flow and the response inspector ==== */
+
+const RequestFlow = {
+  async sendOrCancel() {
+    if (State.sending) {
+      await Api.cancel(State.sending).catch(() => {});
+      return;
+    }
+    this.send();
+  },
+
+  async send() {
+    const current = State.current;
+    if (!current || State.sending) return;
+    const request = current.request;
+    const scope = variableScope(request);
+
+    const { spec, issues } = buildSendSpec(request, uuid("call"), scope, false);
+    if (!this.validateOrReport(issues)) return;
+
+    const env = selectedEnvironment();
+    if (env && env.prodLike && env.confirmUnsafe !== false && UNSAFE_METHODS.includes(request.method)) {
+      const ok = await confirmDialog({
+        title: I18N.t("prodBadge") + " · " + env.name,
+        message: I18N.t("confirmSendUnsafe", { env: env.name, method: request.method }),
+        okText: I18N.t("sendAnyway"),
+        okClass: "btn--danger",
+      });
+      if (!ok) return;
+    }
+
+    const callId = spec.requestId;
+    State.sending = callId;
+    State.lastOutcome = null;
+    ResponseView.render();
+
+    const timeoutMs = (spec.settings.timeoutMs || 30000) + 5000;
+    let outcome;
+    try {
+      const result = await Api.request(spec, timeoutMs);
+      if (State.sending !== callId) return; // superseded
+      if (result && result.cancelled) {
+        outcome = { kind: "cancelled" };
+      } else {
+        const response = normalizeResponse(result);
+        State.responses.set(current.requestId, response);
+        outcome = { kind: "response", response };
+      }
+    } catch (error) {
+      if (State.sending !== callId) return;
+      const category = (error && error.data && error.data.category) || "INTERNAL_ERROR";
+      if (category === "REQUEST_CANCELLED") {
+        outcome = { kind: "cancelled" };
+      } else {
+        outcome = { kind: "error", category, cause: (error && error.message) || String(error) };
+      }
+    } finally {
+      if (State.sending === callId) State.sending = null;
+    }
+
+    State.lastOutcome = outcome.kind === "response" ? null : outcome;
+    this.recordHistory(request, outcome);
+    ResponseView.render();
+    if (outcome.kind === "response") {
+      announce(I18N.t("announceSent", { status: outcome.response.status }));
+    } else if (outcome.kind === "cancelled") {
+      announce(I18N.t("announceCancelled"));
+    } else {
+      announce(I18N.t("announceFailed", { category: outcome.category }));
+    }
+  },
+
+  validateOrReport(issues) {
+    const fields = Object.keys(issues);
+    if (!fields.length) return true;
+    const labels = {
+      url: I18N.t("urlLabel"),
+      headers: I18N.t("tabHeaders"),
+      auth: I18N.t("tabAuth"),
+      body: I18N.t("tabBody"),
+    };
+    const lines = fields.map((field) => {
+      const issue = issues[field];
+      const parts = [labels[field] || field];
+      if (issue.invalid) parts.push(I18N.t("invalidUrl"));
+      if (issue.json) parts.push(I18N.t("jsonInvalid"));
+      if (issue.unresolved && issue.unresolved.length) {
+        parts.push(I18N.t("unresolvedVars", { vars: issue.unresolved.join(", ") }));
+      }
+      return parts.join(" — ");
+    });
+    const panel = $("#editor-panel");
+    let box = panel.querySelector(".field-error[data-send-errors]");
+    if (!box) {
+      box = el("div", { class: "field-error", "data-send-errors": "1", role: "alert" });
+      panel.prepend(box);
+    }
+    box.textContent = lines.join(" · ");
+    box.scrollIntoView({ block: "nearest" });
+    announce(I18N.t("notSentYet") + " " + lines.join(". "));
+    setTimeout(() => { box.remove(); }, 6000);
+    return false;
+  },
+
+  /** History snapshot: built from the redacted request copy, so no credential —
+   * typed literal or resolved — and no body text can reach persistence. */
+  recordHistory(request, outcome) {
+    const safe = redactRequestForHistory(request);
+    const entry = {
+      id: uuid("h"),
+      timestamp: Date.now(),
+      name: safe.name || "",
+      method: safe.method,
+      url: safe.url,
+      status: outcome.kind === "response" ? outcome.response.status : null,
+      durationMs: outcome.kind === "response" ? outcome.response.timing.totalMs : null,
+      sizeBytes: outcome.kind === "response" ? outcome.response.body.sizeBytes : null,
+      error: outcome.kind === "error" ? { category: outcome.category } : null,
+      request: {
+        version: 1,
+        name: safe.name || "",
+        method: safe.method,
+        url: safe.url,
+        query: [],
+        headers: safe.headers
+          .filter((row) => row.enabled)
+          .map((row) => ({ name: row.key, value: row.value })),
+        auth: { type: (safe.auth && safe.auth.type) || "none" },
+        body: safe.body,
+        variables: safe.variables,
+      },
+      responseMeta: outcome.kind === "response"
+        ? { contentType: outcome.response.contentType, statusText: outcome.response.statusText }
+        : null,
+    };
+    State.history.push(entry);
+    if (State.history.length > 500) State.history.splice(0, State.history.length - 500);
+    Api.historyAppend(deepClone(entry)).catch(() => {});
+    Sidebar.render();
+  },
+
+  async copyCurl() {
+    const request = State.current && State.current.request;
+    if (!request) return;
+    const scope = variableScope(request);
+    const { spec } = buildSendSpec(request, "curl", scope, true);
+    try {
+      const result = await Api.exportCurl(spec, 10000);
+      const ok = await copyText(result.curl);
+      toast(ok ? I18N.t("copied") : I18N.t("copyFailed"));
+    } catch (error) {
+      toast(I18N.t("copyFailed") + ": " + (error && error.message));
+    }
+  },
+};
+
+function normalizeResponse(result) {
+  const body = result.body || {};
+  const timing = result.timing || {};
+  return {
+    requestId: result.requestId,
+    status: result.status,
+    statusText: result.statusText || "",
+    headers: result.headers || [],
+    contentType: result.contentType || null,
+    body: {
+      text: body.text != null ? body.text : null,
+      base64: body.base64 != null ? body.base64 : null,
+      truncated: !!body.truncated,
+      sizeBytes: body.sizeBytes || 0,
+    },
+    finalUrl: result.finalUrl,
+    redirectCount: result.redirectCount || 0,
+    timing: {
+      totalMs: timing.totalMs != null ? timing.totalMs : null,
+      ttfbMs: timing.ttfbMs != null ? timing.ttfbMs : null,
+      downloadMs: timing.downloadMs != null ? timing.downloadMs : null,
+    },
+    timestamp: Date.now(),
+  };
+}
+
+/* ---- inspector view: content tabs + persistent diagnostics panel ---- */
+
+const ResponseView = {
+  init() {
+    State.settings.ui.responseView = State.settings.ui.responseView || "text";
+    ResponseView.render();
+  },
+
+  render() {
+    const tabsBar = $("#response-tabs");
+    const summary = $("#response-summary");
+    const wrap = $("#response-wrap");
+    const content = $("#response-content");
+    const diag = $("#diagnostics-panel");
+    content.textContent = "";
+    tabsBar.textContent = "";
+    summary.textContent = "";
+    diag.textContent = "";
+
+    const sending = !!State.sending;
+    wrap.classList.toggle("response-body-wrap--sending", sending);
+
+    const prior = wrap.querySelector(".sending-note");
+    if (prior) prior.remove();
+    if (sending) {
+      wrap.append(el("div", { class: "sending-note", role: "status" },
+        el("span", { class: "spinner", "aria-hidden": "true" }),
+        el("span", { text: I18N.t("sending") }),
+      ));
+    }
+
+    const response = this.activeResponse();
+    this.renderSummary(summary, response, sending);
+    this.renderDiagnostics(diag, response);
+
+    if (State.lastOutcome && State.lastOutcome.kind === "error") {
+      content.append(this.renderErrorCard(State.lastOutcome));
+    } else if (State.lastOutcome && State.lastOutcome.kind === "cancelled") {
+      content.append(el("div", { class: "cancelled-note", role: "status" },
+        el("span", { class: "status-dot status-dot--cancelled" }),
+        el("span", { text: I18N.t("requestCancelled") }),
+      ));
+    }
+
+    if (!response) {
+      if (!State.lastOutcome && content.children.length === 0) {
+        content.append(el("div", { class: "empty", style: "margin:auto" },
+          el("span", { text: I18N.t("noResponse") }),
+        ));
+      }
+      return;
+    }
+
+    const tabs = tabsBar;
+    const cookieCount = response.headers.filter((h) => h.name.toLowerCase() === "set-cookie").length;
+    const tabDefs = [
+      ["body", "responseBody", 0],
+      ["headers", "responseHeaders", response.headers.length],
+      ["cookies", "cookies", cookieCount],
+    ];
+    for (const [id, label, count] of tabDefs) {
+      const button = el("button", {
+        class: "tab", role: "tab",
+        "aria-selected": String(State.responseTab === id),
+        onclick: () => { State.responseTab = id; ResponseView.render(); },
+      },
+        el("span", { text: I18N.t(label) }),
+      );
+      if (count && id !== "body") button.append(el("span", { class: "tab__count", text: String(count) }));
+      tabs.append(button);
+    }
+    content.append(tabs);
+
+    if (State.responseTab === "headers") this.renderHeaders(content, response);
+    else if (State.responseTab === "cookies") this.renderCookies(content, response);
+    else this.renderBody(content, response);
+  },
+
+  activeResponse() {
+    if (!State.current) return null;
+    return State.responses.get(State.current.requestId) || null;
+  },
+
+  renderSummary(summary, response, sending) {
+    if (!response) return;
+    const statusClass = "status-dot--" + String(response.status)[0] + "xx";
+    summary.append(
+      el("span", { class: "stat stat--status" },
+        el("span", { class: "status-dot " + statusClass, "aria-hidden": "true" }),
+        el("span", { text: response.status + " " + response.statusText }),
+      ),
+      el("span", { class: "stat mono", text: formatMs(response.timing.totalMs) }),
+      el("span", { class: "stat mono", text: formatBytes(response.body.sizeBytes) }),
+      el("span", { class: "stat mono", text: formatTime(response.timestamp) }),
+    );
+    if (sending) {
+      summary.append(el("span", { class: "badge badge--warn", text: I18N.t("sending") }));
+    }
+    summary.append(
+      el("button", {
+        class: "icon-btn", type: "button",
+        "aria-label": I18N.t("copyValue"), title: I18N.t("copyValue"),
+        onclick: async () => {
+          const ok = await copyText(response.body.text || "");
+          toast(ok ? I18N.t("copied") : I18N.t("copyFailed"));
+        },
+      }, icon("copy")),
+      el("button", {
+        class: "icon-btn", type: "button",
+        "aria-label": I18N.t("moreActions"), title: I18N.t("moreActions"),
+        "aria-haspopup": "menu",
+        onclick: (event) => openContextMenu(event.currentTarget, [
+          { label: I18N.t("copyAsCurl"), action: () => RequestFlow.copyCurl() },
+        ]),
+      }, icon("dots")),
+    );
+  },
+
+  renderErrorCard(outcome) {
+    const retry = el("button", { class: "btn btn--sm", text: I18N.t("retry"), onclick: () => RequestFlow.send() });
+    return el("div", { class: "error-card", role: "alert" },
+      el("div", { class: "error-card__title" },
+        icon("alert"),
+        el("span", { text: I18N.t("errSummary") + " — " + outcome.category }),
+      ),
+      el("p", { class: "error-card__cause", text: outcome.cause || "" }),
+      el("p", { class: "error-card__next", text: I18N.t("errNext") + " " + nextStepFor(outcome.category) }),
+      retry,
+    );
+  },
+
+  renderHeaders(content, response) {
+    const table = el("table", { class: "headers-table" });
+    table.append(el("thead", {},
+      el("tr", {},
+        el("th", { text: I18N.t("key") }),
+        el("th", { text: I18N.t("value") }),
+      )));
+    const body = el("tbody");
+    for (const header of response.headers) {
+      const row = el("tr", {},
+        el("td", { text: header.name }),
+        el("td", { text: header.value }),
+      );
+      row.addEventListener("dblclick", async () => {
+        const ok = await copyText(header.name + ": " + header.value);
+        toast(ok ? I18N.t("copied") : I18N.t("copyFailed"));
+      });
+      body.append(row);
+    }
+    table.append(body);
+    content.append(el("div", { class: "response-content" }, table));
+  },
+
+  renderCookies(content, response) {
+    const cookies = response.headers.filter((h) => h.name.toLowerCase() === "set-cookie");
+    if (!cookies.length) {
+      content.append(el("div", { class: "empty", text: I18N.t("noCookies") }));
+      return;
+    }
+    const table = el("table", { class: "headers-table" });
+    table.append(el("thead", {}, el("tr", {},
+      el("th", { text: I18N.t("cookies") }),
+    )));
+    const body = el("tbody");
+    for (const cookie of cookies) {
+      body.append(el("tr", {}, el("td", { text: cookie.value })));
+    }
+    table.append(body);
+    content.append(el("div", { class: "response-content" }, table));
+  },
+
+  /** Right-hand diagnostics panel: measured timing phases only (PRD: absent
+   * phases read "not available", never invented) + real response info. */
+  renderDiagnostics(diag, response) {
+    if (!response) return;
+    const { totalMs, ttfbMs, downloadMs } = response.timing;
+
+    const phaseRow = (label, value, percent) => {
+      const available = value != null;
+      return el("div", { class: "diag-row" + (available ? "" : " diag-row--na") },
+        el("span", { text: label }),
+        el("span", { class: "mono", text: available ? formatMs(value) : I18N.t("timingNotAvailable") }),
+        available && percent != null
+          ? el("div", { class: "diag-bar" }, el("div", { class: "diag-bar__fill", style: "width:" + Math.max(1, percent) + "%" }))
+          : null,
+      );
+    };
+
+    const timing = el("div", { class: "diag-section" },
+      el("h3", {}, el("span", { text: I18N.t("timingPanelTitle") }), el("span", { class: "mono", text: formatMs(totalMs) })),
+      totalMs != null
+        ? el("div", { class: "diag-total-bar" }, el("div", { class: "diag-total-bar__fill", style: "width:100%" }))
+        : el("div", { class: "diag-total-bar" }),
+    );
+    if (ttfbMs != null && totalMs > 0) {
+      timing.append(phaseRow(I18N.t("phaseTtfb"), ttfbMs, (ttfbMs / totalMs) * 100));
+    } else {
+      timing.append(phaseRow(I18N.t("phaseTtfb"), null, null));
+    }
+    if (downloadMs != null && totalMs > 0) {
+      timing.append(phaseRow(I18N.t("phaseDownload"), downloadMs, (downloadMs / totalMs) * 100));
+    } else {
+      timing.append(phaseRow(I18N.t("phaseDownload"), null, null));
+    }
+    // Phases this transport cannot measure truthfully yet.
+    for (const label of [I18N.t("phaseDns"), I18N.t("phaseConnect"), I18N.t("phaseTls"), I18N.t("phaseRequest")]) {
+      timing.append(phaseRow(label, null, null));
+    }
+    diag.append(timing);
+
+    const serverHeader = response.headers.find((h) => h.name.toLowerCase() === "server");
+    const info = el("div", { class: "diag-section diag-info" },
+      el("h3", { text: I18N.t("responseInfo") }),
+    );
+    const infoRow = (label, value, mono) => {
+      if (value == null || value === "") return;
+      info.append(el("div", { class: "diag-row" },
+        el("span", { class: "hint", text: label }),
+        el("span", { class: mono === false ? "" : "mono", text: String(value) }),
+      ));
+    };
+    const statusClass = "status-dot--" + String(response.status)[0] + "xx";
+    info.append(el("div", { class: "diag-row" },
+      el("span", { class: "hint", text: I18N.t("infoStatus") }),
+      el("span", { class: "diag-status" },
+        el("span", { class: "status-dot " + statusClass }),
+        response.status + " " + response.statusText,
+      ),
+    ));
+    infoRow(I18N.t("infoSize"), formatBytes(response.body.sizeBytes));
+    infoRow(I18N.t("infoType"), response.contentType);
+    infoRow(I18N.t("infoServer"), serverHeader ? serverHeader.value : null);
+    if (response.redirectCount > 0) {
+      infoRow(I18N.t("infoRedirects"), I18N.t("redirectCountLabel", { count: response.redirectCount }));
+    }
+    infoRow(I18N.t("infoFinalUrl"), response.finalUrl);
+    diag.append(info);
+  },
+
+  renderBody(content, response) {
+    if (response.body.truncated) {
+      content.append(el("div", { class: "truncate-note", role: "alert" },
+        icon("alert"),
+        el("span", {
+          text: I18N.t("truncatedNote", {
+            cap: formatBytes(State.settings.previewCapBytes),
+            shown: formatBytes(response.body.sizeBytes),
+          }),
+        }),
+      ));
+    }
+
+    const isJson = detectJson(response);
+    const toolbar = el("div", { class: "json-toolbar" });
+
+    if (response.body.text == null && response.body.base64 != null) {
+      content.append(el("div", { class: "empty", style: "margin:auto" },
+        el("span", {
+          text: I18N.t("binaryBody", {
+            size: formatBytes(response.body.sizeBytes),
+            type: response.contentType || "application/octet-stream",
+          }),
+        }),
+      ));
+      return;
+    }
+
+    if (isJson) {
+      const prettyBtn = el("button", {
+        class: "btn btn--sm", text: I18N.t("prettify"),
+        title: "Shift+Alt+F",
+        onclick: () => {
+          try {
+            response.body.text = JSON.stringify(JSON.parse(response.body.text), null, 2);
+            State.responses.set(State.current.requestId, response);
+            ResponseView.render();
+          } catch { /* keep original text */ }
+        },
+      });
+      const viewToggle = el("div", { class: "tabs", style: "border:none;padding:0", role: "tablist" });
+      for (const [id, label] of [["text", "viewText"], ["tree", "viewTree"]]) {
+        viewToggle.append(el("button", {
+          class: "tab", role: "tab", style: "height:28px",
+          "aria-selected": String(State.settings.ui.responseView === id),
+          onclick: () => { State.settings.ui.responseView = id; ResponseView.render(); },
+        }, el("span", { text: I18N.t(label) })));
+      }
+      toolbar.append(
+        el("span", { class: "body-format-chip mono", text: "{} JSON" }),
+        prettyBtn,
+        viewToggle,
+      );
+
+      if (State.settings.ui.responseView === "tree") {
+        const search = el("input", {
+          class: "input", type: "search",
+          placeholder: I18N.t("searchJson"),
+          "aria-label": I18N.t("searchJson"),
+        });
+        toolbar.append(search);
+        var view = el("div", { class: "jsonview", role: "tree", "aria-label": I18N.t("responseBody") });
+        const renderTree = (query) => {
+          JsonView.render(view, response.body.text, {
+            query,
+            onNodeAction: (event, node) => openNodeMenu(event, node, response),
+          });
+        };
+        renderTree("");
+        let debounceTimer;
+        search.addEventListener("input", () => {
+          clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(() => renderTree(search.value.trim()), 200);
+        });
+      }
+
+      const copyBtn = el("button", {
+        class: "btn btn--sm",
+        onclick: async () => {
+          const ok = await copyText(response.body.text);
+          toast(ok ? I18N.t("copied") : I18N.t("copyFailed"));
+        },
+      }, icon("copy"), I18N.t("copyValue"));
+      toolbar.append(el("span", { class: "spacer" }), copyBtn);
+      content.append(toolbar);
+      if (State.settings.ui.responseView === "tree") {
+        content.append(view);
+      } else {
+        content.append(renderPrettyJson(response.body.text));
+      }
+      return;
+    }
+
+    toolbar.append(el("span", { class: "hint", text: response.contentType || "text/plain" }));
+    const copyBtn = el("button", {
+      class: "btn btn--sm",
+      onclick: async () => {
+        const ok = await copyText(response.body.text || "");
+        toast(ok ? I18N.t("copied") : I18N.t("copyFailed"));
+      },
+    }, icon("copy"), I18N.t("copyValue"));
+    toolbar.append(el("span", { class: "spacer" }), copyBtn);
+    content.append(toolbar);
+    content.append(renderPrettyJson(response.body.text || "", { highlight: false }));
+  },
+};
+
+const PRETTY_HIGHLIGHT_LIMIT = 512 * 1024;
+
+/** Pretty-printed view with a line-number gutter; JSON is syntax-colored
+ * unless the payload is too large to highlight within the render budget. */
+function renderPrettyJson(text, options) {
+  const opts = options || {};
+  const highlight = opts.highlight !== false;
+  const escaped = escapeHtml(text);
+  let codeHtml = null;
+  if (highlight && text.length <= PRETTY_HIGHLIGHT_LIMIT) {
+    codeHtml = highlightJson(escaped);
+  }
+  const lines = text.length ? text.split("\n").length : 1;
+  const gutter = el("div", { class: "pretty-json__gutter", "aria-hidden": "true" });
+  const gutterLines = Array.from({ length: lines }, (_, i) => i + 1).join("\n");
+  gutter.textContent = gutterLines;
+  const code = el("pre", { class: "pretty-json__code" });
+  if (codeHtml !== null) {
+    code.innerHTML = codeHtml;
+  } else {
+    code.textContent = text;
+  }
+  return el("div", { class: "pretty-json" }, gutter, code);
+}
+
+function escapeHtml(text) {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+/** Minimal JSON tokenizer over escaped HTML: keys, strings, numbers, literals. */
+function highlightJson(escaped) {
+  return escaped.replace(
+    /("(?:\\u[a-fA-F0-9]{4}|\\[^u]|[^\\"])*")(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?/g,
+    (match, str, colon, literal) => {
+      if (str && colon) return '<span class="pj-key">' + str + "</span>" + colon;
+      if (str) return '<span class="pj-string">' + str + "</span>";
+      if (literal) return '<span class="pj-literal">' + literal + "</span>";
+      return '<span class="pj-number">' + match + "</span>";
+    },
+  );
+}
+
+function detectJson(response) {
+  const type = (response.contentType || "").toLowerCase();
+  if (type.includes("json")) return true;
+  const text = response.body.text;
+  if (!text) return false;
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return false;
+  try {
+    JSON.parse(trimmed);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function openNodeMenu(event, node, response) {
+  const { key, path, value } = node;
+  const canSetVar = JsonView.canSetAsVariable(value, response.body.truncated);
+  openContextMenu(event.target.closest(".jv-row") || event.target, [
+    {
+      label: I18N.t("copyValue"),
+      action: async () => {
+        const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
+        toast((await copyText(text)) ? I18N.t("copied") : I18N.t("copyFailed"));
+      },
+    },
+    {
+      label: I18N.t("copyKey"),
+      disabled: key == null,
+      action: async () => toast((await copyText(String(key))) ? I18N.t("copied") : I18N.t("copyFailed")),
+    },
+    {
+      label: I18N.t("copyPath"),
+      action: async () => toast((await copyText(path)) ? I18N.t("copied") : I18N.t("copyFailed")),
+    },
+    { sep: true },
+    {
+      label: I18N.t("setEnvVar"),
+      disabled: !canSetVar,
+      title: canSetVar ? undefined : I18N.t("setEnvVarDisabled"),
+      action: () => setResponseValueAsEnv(key, value),
+    },
+  ]);
+}
+
+async function setResponseValueAsEnv(key, value) {
+  let env = selectedEnvironment();
+  if (!env) {
+    if (!State.environments.length) {
+      env = newEnvironment();
+      State.environments.push(env);
+    } else {
+      env = State.environments[0];
+    }
+    State.settings.selectedEnvId = env.id;
+    Editor.refreshEnvSelector();
+  }
+  const name = String(key == null ? "value" : key).replace(/\s+/g, "_");
+  const existing = env.variables.find((v) => v.name === name);
+  const serialized = typeof value === "string" ? value : JSON.stringify(value);
+  if (existing) {
+    existing.value = serialized;
+    existing.secret = false;
+  } else {
+    env.variables.push({ name, value: serialized, secret: false });
+  }
+  scheduleSave();
+  toast(I18N.t("envVarSet", { name, env: env.name }));
+}
+
+/** Localized recovery hint per stable error category. */
+const NEXT_STEP_KEYS = {
+  INVALID_URL: "nextInvalidUrl",
+  INVALID_REQUEST: "nextInvalidRequest",
+  VARIABLE_UNRESOLVED: "nextVariableUnresolved",
+  DNS_FAILED: "nextDnsFailed",
+  CONNECT_FAILED: "nextConnectFailed",
+  TLS_FAILED: "nextTlsFailed",
+  TIMEOUT: "nextTimeout",
+  REQUEST_CANCELLED: "nextRequestCancelled",
+  TOO_MANY_REDIRECTS: "nextTooManyRedirects",
+  BODY_TOO_LARGE: "nextBodyTooLarge",
+  INTERNAL_ERROR: "nextInternalError",
+};
+
+function nextStepFor(category) {
+  const key = NEXT_STEP_KEYS[category];
+  return key ? I18N.t(key) : I18N.t("nextInternalError");
+}
+
+
+/* ==== js/60-shortcuts.js ==== */
+
+/* ==== Global keyboard shortcuts ====
+   Send Ctrl/Cmd+Enter · Save Ctrl/Cmd+S · New Request Ctrl/Cmd+N ·
+   focus URL Ctrl/Cmd+L · format JSON Shift+Alt+F */
+
+function initShortcuts() {
+  document.addEventListener("keydown", (event) => {
+    const mod = event.ctrlKey || event.metaKey;
+    if (mod && event.key === "Enter") {
+      event.preventDefault();
+      RequestFlow.sendOrCancel();
+      return;
+    }
+    if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      Editor.saveCurrent();
+      return;
+    }
+    if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "n") {
+      event.preventDefault();
+      Editor.newRequest();
+      return;
+    }
+    if (mod && !event.shiftKey && !event.altKey && event.key.toLowerCase() === "l") {
+      event.preventDefault();
+      Editor.urlInput.focus();
+      Editor.urlInput.select();
+      return;
+    }
+    if (event.shiftKey && event.altKey && event.key.toLowerCase() === "f") {
+      event.preventDefault();
+      Editor.formatBody(true);
+    }
+  });
+}
+
+
+/* ==== js/90-main.js ==== */
+
+/* ==== Bootstrap ==== */
+
+async function bootstrap() {
+  await window.dbxPlugin.ready;
+
+  applyEnvironment();
+  applyI18nText();
+
+  window.addEventListener("dbx-plugin-env", () => {
+    applyEnvironment();
+    applyI18nText();
+    Editor.refreshActionButtons();
+    Editor.refreshEnvSelector();
+    Editor.refreshTabs();
+    Editor.renderPanel();
+    ResponseView.render();
+    Sidebar.render();
+  });
+
+  const loaded = await Api.loadAll().catch(() => ({ state: null, history: [] }));
+  if (loaded.state) hydrateState(loaded.state);
+  State.history = loaded.history || [];
+  seedIfEmpty();
+
+  Sidebar.init();
+  Editor.init();
+  ResponseView.init();
+  initShortcuts();
+
+  Editor.newRequest();
+  $("#boot").remove();
+  $("#app").hidden = false;
+}
+
+function applyEnvironment() {
+  I18N.setLocale(window.dbxPlugin.locale || "en");
+  const theme = window.dbxPlugin.theme || {};
+  const appearance = theme.appearance || "light";
+  document.body.dataset.fallback = appearance === "dark" ? "dark" : "light";
+  document.documentElement.style.colorScheme = appearance;
+}
+
+function applyI18nText() {
+  document.querySelectorAll("[data-i18n]").forEach((node) => {
+    node.textContent = I18N.t(node.dataset.i18n);
+  });
+  document.querySelectorAll("[data-i18n-aria]").forEach((node) => {
+    node.setAttribute("aria-label", I18N.t(node.dataset.i18nAria));
+    node.title = I18N.t(node.dataset.i18nAria);
+  });
+  document.querySelectorAll("[data-i18n-ph]").forEach((node) => {
+    node.placeholder = I18N.t(node.dataset.i18nPh);
+  });
+}
+
+function hydrateState(saved) {
+  if (!saved || typeof saved !== "object") return;
+  if (Array.isArray(saved.collections)) State.collections = saved.collections;
+  if (Array.isArray(saved.environments)) {
+    // Loaded state carries no secret values by design; mark them present-but-empty.
+    State.environments = saved.environments.map((env) => ({
+      ...env,
+      variables: (env.variables || []).map((v) => ({
+        name: v.name || "",
+        value: v.secret ? "" : (v.value || ""),
+        secret: !!v.secret,
+      })),
+    }));
+  }
+  if (saved.settings && typeof saved.settings === "object") {
+    State.settings = {
+      ...State.settings,
+      ...saved.settings,
+      ui: { ...State.settings.ui, ...(saved.settings.ui || {}) },
+    };
+  }
+}
+
+function seedIfEmpty() {
+  if (!State.collections.length) {
+    const collection = newCollection("My Collection");
+    const folder = { id: uuid("fld"), type: "folder", name: "Examples", items: [] };
+    const sample = newRequestItem("Sample GET");
+    sample.request.url = "https://httpbin.org/get";
+    sample.request.headers.push(newRow("Accept", "application/json"));
+    folder.items.push(sample);
+    collection.items.push(folder);
+    State.collections.push(collection);
+  }
+}
+
+bootstrap().catch((error) => {
+  const boot = document.getElementById("boot");
+  if (boot) {
+    boot.textContent = "API Studio failed to start: " + (error && error.message ? error.message : error);
+  }
+});
+
+})();
+</script>
+</body>
 </html>

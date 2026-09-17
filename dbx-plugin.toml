@@ -5,5 +5,12 @@ language = "rust"
 directory = "backend"
 binary = "dbx-plugin-dbx-plugin-api-studio"
 
+[dev]
+# UI sources live in ui/src and are inlined into ui/index.html by the
+# zero-dependency bundler. The watcher prints DBX_UI_BUILD_SUCCESS after
+# every successful build so the dev host reloads plugin frames.
+ui_build = ["node", "tools/build-svelte-ui.mjs"]
+ui_watch = ["node", "tools/build-svelte-ui.mjs", "--watch"]
+
 [package]
-include = ["assets", "ui"]
+include = ["assets", "ui/svelte"]

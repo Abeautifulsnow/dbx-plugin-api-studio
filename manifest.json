@@ -1,5 +1,5 @@
 {
-  "$schema": "https://raw.githubusercontent.com/t8y2/dbx/plugin-sdk-v1/plugins/manifest.schema.json",
+  "$schema": "https://raw.githubusercontent.com/t8y2/dbx/main/plugins/manifest.schema.json",
   "manifest_version": 1,
   "id": "io.dbx.api-studio",
   "name": "API Studio",
@@ -17,71 +17,26 @@
     },
     "ui": {
       "root": "ui",
-      "entry": "ui/index.html"
+      "entry": "ui/svelte/index.html"
     }
   },
   "contributions": [
     {
-      "type": "connection-provider",
-      "id": "io.dbx.api-studio.connection",
-      "label": "API Studio connection",
-      "icon": "assets/plugin.svg",
-      "database_type": "dbx-plugin-api-studio",
-      "description": "Connection form contributed by API Studio.",
-      "fields": [
-        {
-          "key": "display_name",
-          "label": "Connection name",
-          "type": "text",
-          "default": "API Studio connection",
-          "binding": "name",
-          "required": true
-        },
-        {
-          "key": "host",
-          "label": "Host",
-          "type": "text",
-          "default": "localhost",
-          "binding": "host",
-          "required": true
-        },
-        {
-          "key": "port",
-          "label": "Port",
-          "type": "number",
-          "default": 0,
-          "binding": "port",
-          "required": true
-        }
-      ],
-      "workbench": "io.dbx.api-studio.workbench",
-      "capabilities": ["test", "connect", "disconnect"]
-    },
-    {
       "type": "workbench",
       "id": "io.dbx.api-studio.workbench",
       "label": "API Studio Workbench",
-      "description": "Sandboxed UI contributed by API Studio.",
+      "description": "Compose, send and inspect HTTP requests.",
       "icon": "assets/plugin.svg"
     }
   ],
   "localizations": {
     "zh-CN": {
       "name": "API Studio",
-      "description": "Build, send, debug and manage API requests in DBX.",
+      "description": "在 DBX 中构建、发送、调试和管理 API 请求。",
       "contributions": {
-        "io.dbx.api-studio.connection": {
-          "label": "API Studio 连接",
-          "description": "由插件声明的连接表单。",
-          "fields": {
-            "display_name": { "label": "连接名称" },
-            "host": { "label": "主机" },
-            "port": { "label": "端口" }
-          }
-        },
         "io.dbx.api-studio.workbench": {
           "label": "API Studio 工作台",
-          "description": "由插件提供的沙箱工作台界面。"
+          "description": "组合、发送并检查 HTTP 请求。"
         }
       }
     }

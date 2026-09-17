@@ -1,12 +1,45 @@
-use std::collections::HashSet;
-use std::sync::Mutex;
+//! DBX API Studio sidecar: protocol glue + RPC dispatch.
+//!
+//! stdout carries JSON-RPC only (enforced by the SDK). Nothing in this plugin
+//! writes request/response content to stderr either — logs are limited to
+//! non-sensitive lifecycle lines, keeping secrets out of diagnostics.
+
+mod curl;
+mod exec;
+mod model;
+mod persist;
 
 use dbx_plugin_sdk::{PluginEmitter, PluginError, PluginHandler, PluginMetadata, PluginServer, RequestContext};
 use serde_json::{json, Value};
 
-#[derive(Default)]
+use crate::exec::InFlightRegistry;
+use crate::model::{ApiError, ExecOutcome};
+use crate::persist::{FilePersistence, PersistenceAdapter};
+
 struct Plugin {
-    connections: Mutex<HashSet<String>>,
+    registry: InFlightRegistry,
+    storage: Option<FilePersistence>,
+}
+
+impl Plugin {
+    fn storage(&self) -> Result<&FilePersistence, PluginError> {
+        self.storage.as_ref().ok_or_else(|| {
+            PluginError::new(-32000, "Local storage is unavailable on this machine")
+        })
+    }
+}
+
+fn api_error(error: ApiError) -> PluginError {
+    let mut plugin_error = PluginError::new(error.code, error.message);
+    plugin_error.data = Some(json!({
+        "category": error.category,
+        "requestId": error.request_id,
+    }));
+    plugin_error
+}
+
+fn io_error(error: std::io::Error) -> PluginError {
+    PluginError::new(-32000, format!("Persistence failure: {error}"))
 }
 
 impl PluginHandler for Plugin {
@@ -14,57 +47,129 @@ impl PluginHandler for Plugin {
         &self,
         _context: RequestContext,
         method: &str,
-        params: Value,
+        mut params: Value,
         _emitter: &PluginEmitter,
     ) -> Result<Value, PluginError> {
         match method {
-            "connection/test" => {
-                let connection = params.get("connection").cloned().unwrap_or_default();
-                Ok(json!({
-                    "success": true,
-                    "message": format!(
-                        "API Studio is ready for {}:{}.",
-                        connection.get("host").and_then(Value::as_str).unwrap_or("localhost"),
-                        connection.get("port").and_then(Value::as_u64).unwrap_or(0)
-                    )
-                }))
+            "api/request" => {
+                let spec: model::RequestSpec = serde_json::from_value(params.clone())
+                    .map_err(|e| PluginError::new(-32602, format!("Invalid request: {e}")))?;
+                let validated = model::validate_spec(spec).map_err(api_error)?;
+                let cancel = self.registry.register(&validated.request_id);
+                match exec::execute(validated, &self.registry, cancel) {
+                    ExecOutcome::Response(payload) => Ok(response_json(payload)),
+                    ExecOutcome::Cancelled { request_id } => Ok(json!({
+                        "requestId": request_id,
+                        "cancelled": true,
+                        "category": "REQUEST_CANCELLED"
+                    })),
+                    ExecOutcome::Failed { request_id, category, cause } => {
+                        Err(api_error(ApiError::transport(&category, cause).with_request_id(&request_id)))
+                    }
+                }
             }
-            "connection/connect" => {
-                let connection_id = connection_id(&params)?;
-                self.connections
-                    .lock()
-                    .map_err(|_| PluginError::new(-32000, "Connection registry is poisoned"))?
-                    .insert(connection_id.to_string());
-                Ok(json!({ "success": true }))
+            "api/cancel" => {
+                let request_id = params
+                    .get("requestId")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| PluginError::new(-32602, "Missing requestId"))?
+                    .to_string();
+                let cancelled = self.registry.cancel(&request_id);
+                Ok(json!({ "requestId": request_id, "cancelled": cancelled }))
             }
-            "connection/disconnect" => {
-                let connection_id = connection_id(&params)?;
-                self.connections
-                    .lock()
-                    .map_err(|_| PluginError::new(-32000, "Connection registry is poisoned"))?
-                    .remove(connection_id);
-                Ok(json!({ "success": true }))
+            "api/export-curl" => {
+                let spec = params.take();
+                curl::export(spec).map_err(api_error).map(|command| json!({ "curl": command }))
             }
-            "dbx-plugin-api-studio/ping" => Ok(json!({
-                "ok": true,
-                "plugin": "io.dbx.api-studio",
-                "language": "rust",
-                "connectionId": params.get("connectionId").cloned().unwrap_or(Value::Null)
-            })),
+            "api/persistence/load" => {
+                let storage = self.storage()?;
+                let state = storage.load_state().map_err(io_error)?;
+                let history = storage.load_history().map_err(io_error)?;
+                Ok(json!({ "state": state, "history": history }))
+            }
+            "api/persistence/save" => {
+                let mut state = params
+                    .get("state")
+                    .cloned()
+                    .ok_or_else(|| PluginError::new(-32602, "Missing state"))?;
+                // Defense in depth: never write a credential even if a client
+                // sends one (see model::redact_state_payload).
+                model::redact_state_payload(&mut state);
+                self.storage()?.save_state(&state).map_err(io_error)?;
+                Ok(json!({ "saved": true }))
+            }
+            "api/persistence/history-append" => {
+                let entry = params
+                    .get("entry")
+                    .cloned()
+                    .ok_or_else(|| PluginError::new(-32602, "Missing entry"))?;
+                let evicted = self.storage()?.append_history(entry).map_err(io_error)?;
+                Ok(json!({ "evicted": evicted }))
+            }
+            "api/persistence/history-clear" => {
+                self.storage()?.clear_history().map_err(io_error)?;
+                Ok(json!({ "cleared": true }))
+            }
             _ => Err(PluginError::method_not_found(method)),
         }
     }
 }
 
-fn connection_id(params: &Value) -> Result<&str, PluginError> {
-    params
-        .get("connection")
-        .and_then(|connection| connection.get("id"))
-        .and_then(Value::as_str)
-        .ok_or_else(|| PluginError::new(-32602, "Missing connection id"))
+fn response_json(payload: model::ResponsePayload) -> Value {
+    let model::ResponsePayload {
+        request_id,
+        status,
+        status_text,
+        headers,
+        content_type,
+        body_text,
+        body_base64,
+        body_truncated,
+        body_bytes,
+        final_url,
+        redirect_count,
+        total_ms,
+        ttfb_ms,
+        download_ms,
+    } = payload;
+    json!({
+        "requestId": request_id,
+        "status": status,
+        "statusText": status_text,
+        "headers": headers.into_iter()
+            .map(|(name, value)| json!({ "name": name, "value": value }))
+            .collect::<Vec<_>>(),
+        "contentType": content_type,
+        "body": {
+            "text": body_text,
+            "base64": body_base64,
+            "truncated": body_truncated,
+            "sizeBytes": body_bytes
+        },
+        "finalUrl": final_url,
+        "redirectCount": redirect_count,
+        "timing": {
+            "totalMs": total_ms,
+            "ttfbMs": ttfb_ms,
+            "downloadMs": download_ms
+        }
+    })
 }
 
 fn main() -> std::io::Result<()> {
-    let metadata = PluginMetadata::new("io.dbx.api-studio", env!("CARGO_PKG_VERSION")).with_capability("connections");
-    PluginServer::new(metadata, Plugin::default()).serve()
+    let storage = match FilePersistence::new() {
+        Ok(storage) => Some(storage),
+        Err(error) => {
+            // Storage being unavailable must not stop request execution; the
+            // persistence methods report a structured error to the UI instead.
+            eprintln!("api-studio: local storage unavailable: {error}");
+            None
+        }
+    };
+    let plugin = Plugin {
+        registry: InFlightRegistry::default(),
+        storage,
+    };
+    let metadata = PluginMetadata::new("io.dbx.api-studio", env!("CARGO_PKG_VERSION"));
+    PluginServer::new(metadata, plugin).serve()
 }

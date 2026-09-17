@@ -22,3 +22,12 @@ target
 
 # RustRover
 #.idea/
+
+# Local cargo SDK patch (machine-specific path via npm CLI sdk-root)
+backend/.cargo/
+.claude/
+.codex/
+.agents/
+.mimosa/
+.trellis/
+node_modules/
