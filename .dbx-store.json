@@ -1,0 +1,17 @@
+{
+  "name": "API Studio",
+  "description": "Build, send, debug and manage API requests in DBX.",
+  "icon": "assets/plugin.svg",
+  "tags": ["http", "rest", "api", "developer-tools"],
+  "permissions": [],
+  "source": "https://github.com/Abeautifulsnow/dbx-plugin-api-studio",
+  "homepage": "https://github.com/Abeautifulsnow/dbx-plugin-api-studio",
+  "license": "MIT",
+  "releaseNotes": "首个公开版本：在 DBX 内构建、发送、调试和管理 HTTP/REST 请求的工作台。支持 Query/Header/Auth（Bearer、Basic、API Key）/Body（JSON、urlencoded、multipart、text）全量编辑，cURL 导入导出，会话 Cookie Jar，变量与密钥遮蔽，中英双语界面。",
+  "localizations": {
+    "zh-CN": {
+      "name": "API Studio",
+      "description": "在 DBX 中构建、发送、调试和管理 API 请求。"
+    }
+  }
+}
