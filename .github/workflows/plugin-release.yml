@@ -10,7 +10,9 @@ permissions:
 jobs:
   # The release packages the committed ui/index.html, so fail before packaging
   # when the artifact is stale relative to frontend/src (same gate as
-  # ui-build-check.yml, which only covers pushes and PRs).
+  # ui-build-check.yml, which only covers pushes and PRs). The wire fixtures
+  # and the Rust side of the contract are verified in the same job so a release
+  # cannot go out with a drifted UI→Rust contract.
   verify-ui:
     runs-on: ubuntu-24.04
     steps:
@@ -19,9 +21,16 @@ jobs:
         with:
           node-version: "22"
           cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
       - run: npm ci
       - run: npm run build:ui
       - run: git diff --exit-code ui/index.html
+      - run: npm run test:ui
+      - run: cargo test --manifest-path backend/Cargo.toml
+      - run: git diff --exit-code backend/tests/fixtures/wire_specs.json
 
   release:
     needs: verify-ui

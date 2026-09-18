@@ -15,6 +15,9 @@ export const CONTENT_TYPES = {
   json: "application/json",
   text: "text/plain",
   urlencoded: "application/x-www-form-urlencoded",
+  // Display only: the transport generates the actual boundary; the editor must
+  // not show text/plain for a multipart body.
+  multipart: "multipart/form-data",
 };
 
 /**

@@ -83,16 +83,24 @@ pub fn export(spec_value: serde_json::Value) -> Result<String, crate::model::Api
     // "Copy as cURL reproduces the request" — that includes the transport
     // route, so a custom proxy must appear in the command.
     match &validated.proxy {
-        crate::model::ProxyPlan::None => parts.push("--noproxy".to_string()),
+        // curl requires an argument here; `*` disables proxying for all hosts.
+        crate::model::ProxyPlan::None => {
+            parts.push("--noproxy".to_string());
+            parts.push(shell_quote("*"));
+        }
         crate::model::ProxyPlan::Custom {
             url,
             username: Some(username),
-            password: Some(password),
+            password,
         } => {
             parts.push("--proxy".to_string());
             parts.push(shell_quote(url));
             parts.push("--proxy-user".to_string());
-            parts.push(shell_quote(&format!("{username}:{password}")));
+            parts.push(shell_quote(&format!(
+                "{}:{}",
+                username,
+                password.as_deref().unwrap_or("")
+            )));
         }
         crate::model::ProxyPlan::Custom { url, .. } => {
             parts.push("--proxy".to_string());
@@ -402,20 +410,21 @@ pub fn parse_import(input: &str) -> Result<Value, ApiError> {
 
     // An Authorization header folds into the auth model so the editor can
     // manage the credential (masked, session-only) instead of a raw header.
-    // A Content-Type is only folded when a body model consumes it (json /
-    // urlencoded); anything else (application/xml, application/graphql, vendor
-    // types) must survive as a header or the imported request would silently
-    // send text/plain instead.
+    // A Content-Type is *remembered* here but only removed later, once the
+    // body model has actually consumed its semantics (see the remove step
+    // after the body kind is decided); otherwise the header survives, so an
+    // imported `application/xml` never degrades to the editor's default
+    // text/plain.
     let mut content_type: Option<String> = None;
+    for (name, value) in headers.iter() {
+        if name.eq_ignore_ascii_case("content-type") {
+            content_type = Some(value.clone());
+        }
+    }
     headers.retain(|(name, value)| {
         let lower = name.to_ascii_lowercase();
         if lower == "content-type" {
-            let value_lower = value.to_ascii_lowercase();
-            if value_lower.contains("json") || value_lower.contains("x-www-form-urlencoded") {
-                content_type = Some(value.clone());
-                return false;
-            }
-            return true;
+            return false;
         }
         if lower == "authorization" {
             if let Some(token) = value
@@ -501,6 +510,21 @@ pub fn parse_import(input: &str) -> Result<Value, ApiError> {
     } else if has_urlencode {
         body_kind = "urlencoded";
     }
+
+    // The Content-Type header was taken out of `headers` above; put it back
+    // unless a body model actually absorbed its semantics:
+    // - json / urlencoded bodies: the model owns the type (re-added at send).
+    // - multipart: the transport owns the boundary.
+    // - text bodies: "text" was only chosen because no model claimed the
+    //   declared type, so restore it — otherwise the request silently degrades
+    //   to the editor default (text/plain) instead of application/xml etc.
+    let content_type_consumed = matches!(body_kind, "json" | "urlencoded" | "multipart");
+    if !content_type_consumed {
+        if let Some(original) = &content_type {
+            headers.push(("Content-Type".to_string(), original.clone()));
+        }
+    }
+
     let method = method.unwrap_or_else(|| {
         if body_kind == "none" {
             "GET".to_string()
@@ -830,6 +854,37 @@ mod tests {
     }
 
     #[test]
+    fn import_keeps_the_declared_content_type_when_the_body_model_cannot_consume_it() {
+        // Declared urlencoded but the body is not parseable as pairs: the body
+        // becomes plain text, and the ORIGINAL content type must survive as a
+        // header instead of degrading to the editor default (text/plain).
+        let imported = import(
+            "curl https://x.test -H 'Content-Type: application/x-www-form-urlencoded' -d 'this-is-not-a-key-value'",
+        );
+        let request = &imported["request"];
+        assert_eq!(request["body"]["type"], "text");
+        let headers = request["headers"].as_array().unwrap();
+        assert!(
+            headers.iter().any(|header| header["key"] == "Content-Type"
+                && header["value"] == "application/x-www-form-urlencoded"),
+            "{headers:?}"
+        );
+    }
+
+    #[test]
+    fn import_still_folds_a_consumed_json_content_type() {
+        let imported = import(
+            "curl https://x.test -H 'Content-Type: application/json' -d '{\"a\":1}'",
+        );
+        assert_eq!(imported["request"]["body"]["type"], "json");
+        let headers = imported["request"]["headers"].as_array().unwrap();
+        assert!(
+            !headers.iter().any(|header| header["key"] == "Content-Type"),
+            "{headers:?}"
+        );
+    }
+
+    #[test]
     fn export_includes_a_custom_proxy() {
         // "Copy as cURL reproduces the request" — the transport route included.
         let curl = export_json(json!({
@@ -847,6 +902,7 @@ mod tests {
 
     #[test]
     fn export_flags_noproxy_when_disabled() {
+        // --noproxy needs an argument; `*` disables proxying for all hosts.
         let curl = export_json(json!({
             "requestId": "r1",
             "method": "GET",
@@ -856,6 +912,22 @@ mod tests {
             "jarKey": null,
             "settings": { "proxy": { "mode": "none" } }
         }));
-        assert!(curl.contains("--noproxy"), "{curl}");
+        assert!(curl.contains("--noproxy '*'"), "{curl}");
+    }
+
+    #[test]
+    fn export_keeps_proxy_auth_for_a_username_without_password() {
+        // The transport sends an empty password in this case; the command must
+        // reproduce that instead of silently dropping the credential.
+        let curl = export_json(json!({
+            "requestId": "r1",
+            "method": "GET",
+            "url": "https://api.test/x",
+            "headers": [],
+            "body": { "type": "none" },
+            "jarKey": null,
+            "settings": { "proxy": { "mode": "custom", "url": "http://127.0.0.1:8080", "username": "u", "password": "" } }
+        }));
+        assert!(curl.contains("--proxy-user 'u:'"), "{curl}");
     }
 }

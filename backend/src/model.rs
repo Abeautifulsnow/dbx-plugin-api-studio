@@ -28,9 +28,12 @@ pub const METHODS: [&str; 7] = [
 ];
 
 /// Multipart file parts are read into memory before the upload starts
-/// (`reqwest::multipart::Part::bytes`); larger files should stream via
-/// `Part::stream` once the transport moves to framed bodies. Until then a part
-/// above this size is rejected up front instead of allocating blindly.
+/// (`reqwest::multipart::Part::bytes`); larger files should stream instead
+/// (`tokio::fs::File` → `Part::stream`). Note this does NOT depend on the DBX
+/// `stdio-framed` transport: the sidecar reads the local file itself, so the
+/// bytes never cross the RPC bridge — only large *responses to the UI* need
+/// framed. Until the streaming upgrade lands, a part above this size is
+/// rejected up front instead of allocating blindly.
 pub const MAX_MULTIPART_FILE_BYTES: u64 = 256 * 1024 * 1024;
 
 /// The JSON-RPC transport rejects any single message over 8 MiB. serde_json can

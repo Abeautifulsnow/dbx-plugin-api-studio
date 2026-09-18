@@ -44,6 +44,12 @@ jobs:
           node-version: "22"
           cache: npm
 
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+
       - name: Install dependencies
         run: npm ci
 
@@ -62,3 +68,17 @@ jobs:
 
       - name: Test suites (library, state, redaction, class coverage, boot)
         run: npm run test:ui
+
+      # The UI suites regenerate backend/tests/fixtures/wire_specs.json from
+      # the real buildSendSpec; running cargo test right after — then diffing —
+      # makes the UI → JSON → Rust wire contract a hard gate in one job. A
+      # frontend contract change without regenerated fixtures fails here.
+      - name: Verify the Rust side of the wire contract
+        run: cargo test --manifest-path backend/Cargo.toml
+
+      - name: Fail when wire fixtures are stale
+        run: |
+          if ! git diff --exit-code -- backend/tests/fixtures/wire_specs.json; then
+            echo "::error file=backend/tests/fixtures/wire_specs.json::wire_specs.json does not match buildSendSpec — run 'npm run test:ui' and commit the result."
+            exit 1
+          fi
