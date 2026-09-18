@@ -8,11 +8,30 @@ permissions:
   contents: write
 
 jobs:
+  # The release packages the committed ui/index.html, so fail before packaging
+  # when the artifact is stale relative to frontend/src (same gate as
+  # ui-build-check.yml, which only covers pushes and PRs).
+  verify-ui:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run build:ui
+      - run: git diff --exit-code ui/index.html
+
   release:
+    needs: verify-ui
     uses: t8y2/dbx/.github/workflows/plugin-release-reusable.yml@plugin-sdk-v1
     with:
       release-tag: ${{ github.event.release.tag_name }}
       package-command: dbx-plugin package .
       package-path: dist/*.dbxp
       metadata-path: dist/*.artifact.json
-      plugin-cli-version: 0.1.6
+      # Keep in sync with the locally used CLI (npx dbx-plugin --version); a
+      # mismatch means the release candidates were built against a different
+      # SDK contract than the ones verified locally.
+      plugin-cli-version: 0.1.9

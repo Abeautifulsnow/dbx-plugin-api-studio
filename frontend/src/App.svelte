@@ -11,6 +11,7 @@
     findCollectionOf,
     findItem,
     historyEntry,
+    mergeQueryRows,
     migrateHistory,
     migrateState,
     newCollection,
@@ -435,15 +436,7 @@
 
   /** Mirror the URL query into rows, keeping row ids and disabled rows intact. */
   function syncQueryFromUrl(urlText) {
-    const { pairs } = parseUrlQuery(urlText);
-    const previous = new Map(
-      current.request.query.filter((row) => row.enabled && row.key).map((row) => [row.key, row]),
-    );
-    const rows = pairs.map((pair) => {
-      const existing = previous.get(pair.key);
-      return existing ? { ...existing, value: pair.value } : newRow(pair.key, pair.value);
-    });
-    current.request.query = [...rows, ...current.request.query.filter((row) => !row.enabled)];
+    current.request.query = mergeQueryRows(current.request.query, parseUrlQuery(urlText).pairs);
   }
 
   function syncUrlFromQuery() {
@@ -563,6 +556,12 @@
     api.appendHistory(entry).catch((failure) => toast(failure?.message ?? String(failure)));
   }
 
+  /**
+   * Copy as cURL semantics (decided): the command reproduces the request as it
+   * would be sent, so literal credentials are included — Postman-style. Only
+   * secret {{references}} stay as placeholders, so a shared command never
+   * embeds a session secret value; the hint text states this trade-off.
+   */
   async function copyCurl() {
     const scope = variableScope(selectedEnv, current.request);
     const { spec, issues } = buildSendSpec(current.request, uid("curl"), scope, {
@@ -612,7 +611,7 @@
       x: event.clientX,
       y: event.clientY,
       items: [
-        { id: "curl", label: t("copyAsCurl"), icon: "copy" },
+        { id: "curl", label: t("copyAsCurl"), hint: t("copyAsCurlHint"), icon: "copy" },
         { id: "save", label: t("save"), icon: "save", disabled: !current.dirty },
       ],
       onSelect: (id) => (id === "curl" ? copyCurl() : saveCurrent()),

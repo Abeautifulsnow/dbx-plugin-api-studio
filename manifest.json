@@ -7,10 +7,13 @@
   "publisher": "runstone",
   "description": "Build, send, debug and manage API requests in DBX.",
   "icon": "assets/plugin.svg",
+  "source": "https://github.com/Abeautifulsnow/dbx-plugin-api-studio",
+  "homepage": "https://github.com/Abeautifulsnow/dbx-plugin-api-studio",
   "engines": {
     "dbx": ">=0.5.68",
     "host_api": "1"
   },
+  "permissions": [],
   "entrypoints": {
     "backend": {
       "executable": "bin/dbx-plugin-dbx-plugin-api-studio"

@@ -33,7 +33,16 @@
     onChange();
   }
 
-  const CAP_OPTIONS = [512 * 1024, 1024 * 1024, 2 * 1024 * 1024, 8 * 1024 * 1024];
+  // All options sit inside the sidecar's 6 MiB ceiling, so the UI never offers
+  // a value that would be silently clamped. Binary previews stop lower (4 MiB
+  // raw) because base64 expands them 4/3 inside the 8 MiB RPC message.
+  const CAP_OPTIONS = [
+    512 * 1024,
+    1024 * 1024,
+    2 * 1024 * 1024,
+    4 * 1024 * 1024,
+    6 * 1024 * 1024,
+  ];
 </script>
 
 <div class="settings-panel">

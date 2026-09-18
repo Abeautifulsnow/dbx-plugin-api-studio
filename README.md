@@ -8,11 +8,15 @@ For the complete [English plugin development guide](https://dbxio.com/en/docs/pl
 
 ## Develop
 
-With Node.js 22+ and the backend compiler installed, run the browser development host without DBX:
+With Node.js 22+ and the backend compiler installed:
 
 ```bash
+npm install                # frontend dependencies; the dev host does not install them
+npm run build:ui           # bundle frontend/src into the single-file ui/index.html
 dbx-plugin dev --path . --port 5190
 ```
+
+`npm run check:ui` type-checks the Svelte sources; `npm run test:ui` runs the UI test suites (the boot suite additionally needs Chrome, Edge or Chromium). The dev host reloads plugin frames whenever a UI build prints `DBX_UI_BUILD_SUCCESS`.
 
 The CLI builds the backend and loads the declared UI. Optional `[dev]` `ui_build` and `ui_watch` command arrays configure frontend builds. Development credentials are stored as local plaintext in `.dbx-dev/`; keep that directory out of commits and packages. Use the real DBX host for final integration testing.
 

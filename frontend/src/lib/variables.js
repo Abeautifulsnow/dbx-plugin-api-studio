@@ -205,11 +205,18 @@ export function parseUrlQuery(urlText) {
   return { pairs, base };
 }
 
+/**
+ * Replace the query of `urlText` with `pairs`, preserving the fragment.
+ * Accepts a full URL or a bare base: an existing query is always replaced,
+ * never appended to (appending would produce `url?old?new`).
+ */
 export function rebuildUrlQuery(urlText, pairs) {
   const text = String(urlText || "");
   const hashIndex = text.indexOf("#");
-  const base = hashIndex >= 0 ? text.slice(0, hashIndex) : text;
+  const withoutHash = hashIndex >= 0 ? text.slice(0, hashIndex) : text;
   const hash = hashIndex >= 0 ? text.slice(hashIndex) : "";
+  const queryIndex = withoutHash.indexOf("?");
+  const base = queryIndex >= 0 ? withoutHash.slice(0, queryIndex) : withoutHash;
   if (!pairs.length) return base + hash;
   const query = pairs
     .map((pair) => encodeURIComponent(pair.key) + "=" + encodeURIComponent(pair.value))

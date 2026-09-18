@@ -19,6 +19,7 @@ import {
   findCollectionOf,
   findItem,
   historyEntry,
+  mergeQueryRows,
   migrateHistory,
   migrateState,
   newCollection,
@@ -169,6 +170,8 @@ for (const [label, input] of [
 
 /* ------------------------------------------------------------------ history */
 
+// The fixture is in DISK order (oldest first — the sidecar appends and evicts
+// from the front); migrateHistory must return newest-first.
 const history = migrateHistory([
   {
     id: "h1",
@@ -180,10 +183,11 @@ const history = migrateHistory([
   },
   { method: "GET", url: "https://y.test" },
 ]);
-check("history entries keep their id", history[0].id === "h1");
-check("history headers are normalised to `key`", history[0].request.headers[0].key === "X-A");
-check("history headers get ids", typeof history[0].request.headers[0].id === "string");
-check("an entry without an id gets one", typeof history[1].id === "string" && history[1].id !== "");
+check("history is newest-first after migration", history[0].method === "GET" && history[1].id === "h1");
+check("history entries keep their id", history[1].id === "h1");
+check("history headers are normalised to `key`", history[1].request.headers[0].key === "X-A");
+check("history headers get ids", typeof history[1].request.headers[0].id === "string");
+check("an entry without an id gets one", typeof history[0].id === "string" && history[0].id !== "");
 check("migrateHistory tolerates junk", migrateHistory(null).length === 0 && migrateHistory("x").length === 0);
 check(
   "history entry ids are unique",
@@ -207,6 +211,89 @@ const persistedText = JSON.stringify(persisted);
 check("secret environment values are emptied", !persistedText.includes("LIVE-SECRET"));
 check("ordinary environment values survive", persistedText.includes("https://api.test"));
 check("the payload is versioned", persisted.version === STATE_VERSION);
+
+/* -------------------------------------------- [REDACTED] placeholder cleanup */
+
+// A saved credential comes back from disk as the [REDACTED] placeholder. It
+// must never masquerade as a sendable value: on load it becomes an empty field.
+const redacted = migrateState({
+  collections: [
+    {
+      id: "c",
+      type: "collection",
+      name: "C",
+      items: [
+        {
+          id: "r",
+          type: "request",
+          name: "R",
+          request: {
+            method: "GET",
+            url: "https://x.test/x?token=%5BREDACTED%5D",
+            headers: [
+              { key: "Authorization", value: "[REDACTED]", enabled: true },
+              { key: "Accept", value: "[REDACTED]", enabled: true },
+            ],
+            query: [{ key: "token", value: "[REDACTED]", enabled: true }],
+            auth: { type: "bearer", token: "[REDACTED]" },
+          },
+        },
+      ],
+    },
+  ],
+  environments: [],
+  settings: {},
+});
+const migratedRequest = redacted.collections[0].items[0].request;
+check("redacted auth token loads as empty", migratedRequest.auth.token === "");
+check(
+  "redacted credential header loads as empty",
+  migratedRequest.headers.find((row) => row.key === "Authorization").value === "",
+);
+check(
+  "redacted credential query value loads as empty",
+  migratedRequest.query.find((row) => row.key === "token").value === "",
+);
+check(
+  "the placeholder pair is dropped from the URL",
+  !migratedRequest.url.includes("REDACTED") && migratedRequest.url.startsWith("https://x.test/x"),
+  migratedRequest.url,
+);
+check(
+  "an identical value on a non-credential header is left alone",
+  migratedRequest.headers.find((row) => row.key === "Accept").value === "[REDACTED]",
+);
+
+/* ------------------------------------------------------------ query reconcile */
+
+const queryRows = mergeQueryRows(
+  [
+    { id: "r1", key: "tag", value: "old", enabled: true },
+    { id: "d1", key: "debug", value: "true", enabled: false },
+  ],
+  [
+    { key: "tag", value: "a" },
+    { key: "tag", value: "b" },
+    { key: "page", value: "2" },
+  ],
+);
+check("duplicate keys produce one row per occurrence", queryRows.length === 4);
+check(
+  "duplicate-key row ids are unique (keyed editor must not throw)",
+  new Set(queryRows.map((row) => row.id)).size === queryRows.length,
+);
+check("the first occurrence reuses the existing row", queryRows[0].id === "r1" && queryRows[0].value === "a");
+check("the second occurrence clones a fresh row", queryRows[0].id !== queryRows[1].id && queryRows[1].value === "b");
+check("a new key gets a fresh row", queryRows[2].key === "page" && queryRows[2].value === "2");
+check("disabled rows survive the sync", queryRows[3].id === "d1" && queryRows[3].enabled === false);
+
+const reconciled = mergeQueryRows(
+  [{ id: "gone", key: "gone", value: "1", enabled: true }],
+  [{ key: "a", value: "1" }],
+);
+check("enabled rows whose key left the URL are dropped", reconciled.length === 1 && reconciled[0].key === "a");
+check("no pairs yields only the disabled rows", mergeQueryRows([{ id: "d", key: "k", value: "", enabled: false }], []).length === 1);
+check("mergeQueryRows tolerates junk", mergeQueryRows(null, [{ key: "a", value: "1" }]).length === 1);
 
 /* ------------------------------------------------------------ tree helpers */
 

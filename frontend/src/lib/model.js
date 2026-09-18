@@ -15,7 +15,15 @@
  * UI rewrite look like data loss to the user.
  */
 import { deepClone, uid } from "./format.js";
-import { sanitizeTree, sanitizeRequestForPersistence } from "./redaction.js";
+import {
+  AUTH_CREDENTIAL_FIELDS,
+  REDACTED,
+  isSensitiveHeaderName,
+  isSensitiveQueryName,
+  sanitizeTree,
+  sanitizeRequestForPersistence,
+} from "./redaction.js";
+import { parseUrlQuery, rebuildUrlQuery } from "./variables.js";
 
 export const STATE_VERSION = 2;
 
@@ -100,7 +108,7 @@ function normalizeRow(raw, { secret = false } = {}) {
 function normalizeRequest(raw) {
   const request = asObject(raw);
   const base = defaultRequest();
-  return {
+  const normalized = {
     ...base,
     ...request,
     name: String(request.name ?? ""),
@@ -118,6 +126,30 @@ function normalizeRequest(raw) {
     variables: asArray(request.variables).map((row) => normalizeRow(row, { secret: true })),
     settings: { ...base.settings, ...asObject(request.settings) },
   };
+
+  // Saved credentials are stored as the `[REDACTED]` placeholder (or emptied).
+  // The placeholder must never masquerade as a value the user can send, so on
+  // load it becomes an empty field the user has to refill.
+  const auth = asObject(normalized.auth);
+  for (const field of AUTH_CREDENTIAL_FIELDS[auth.type] || []) {
+    if (auth[field] === REDACTED) auth[field] = "";
+  }
+  for (const row of normalized.headers) {
+    if (row.value === REDACTED && isSensitiveHeaderName(row.key)) row.value = "";
+  }
+  // ... and in the URL itself, where a credential query parameter is stored
+  // redacted: drop the pair instead of sending the placeholder.
+  const urlPairs = parseUrlQuery(normalized.url);
+  if (urlPairs.pairs.some((pair) => pair.value === REDACTED && isSensitiveQueryName(pair.key))) {
+    normalized.url = rebuildUrlQuery(
+      normalized.url,
+      urlPairs.pairs.filter((pair) => !(pair.value === REDACTED && isSensitiveQueryName(pair.key))),
+    );
+  }
+  for (const row of normalized.query) {
+    if (row.value === REDACTED && isSensitiveQueryName(row.key)) row.value = "";
+  }
+  return normalized;
 }
 
 function normalizeNode(raw) {
@@ -162,14 +194,21 @@ export function migrateState(raw) {
   };
 }
 
-/** History entries written by v1 stored headers as `{name, value}`. */
+/** History entries written by v1 stored headers as `{name, value}`.
+ *
+ * Disk order is oldest-first (the sidecar appends and evicts from the front);
+ * the UI invariant is `history[0]` = newest, so the reversal happens here and
+ * no caller can forget it.
+ */
 export function migrateHistory(raw) {
   if (!Array.isArray(raw)) return [];
-  return raw.map((entry) => ({
-    ...entry,
-    id: typeof entry?.id === "string" && entry.id ? entry.id : uid("history"),
-    request: entry?.request ? normalizeRequest(entry.request) : undefined,
-  }));
+  return raw
+    .map((entry) => ({
+      ...entry,
+      id: typeof entry?.id === "string" && entry.id ? entry.id : uid("history"),
+      request: entry?.request ? normalizeRequest(entry.request) : undefined,
+    }))
+    .reverse();
 }
 
 /* ------------------------------------------------------------- state payload */
@@ -197,6 +236,33 @@ export function persistableState(state) {
     })),
     settings: deepClone(source.settings),
   };
+}
+
+/* ------------------------------------------------------------ row reconcile */
+
+/**
+ * Reconcile the query rows with pairs parsed from the URL (URL → Params sync).
+ *
+ * Existing enabled rows are consumed in order per key, so `?tag=a&tag=b` maps
+ * the first pair to the first `tag` row and clones a fresh row for the second:
+ * duplicate keys must never share a row id (the keyed editor throws) or a
+ * value. Enabled rows whose key no longer appears are dropped; disabled rows
+ * always survive, so unticking a parameter is not undone by editing the URL.
+ */
+export function mergeQueryRows(existingRows, pairs) {
+  const pool = new Map();
+  for (const row of asArray(existingRows)) {
+    if (!row.enabled || !row.key) continue;
+    if (!pool.has(row.key)) pool.set(row.key, []);
+    pool.get(row.key).push(row);
+  }
+  const rows = asArray(pairs).map((pair) => {
+    const candidates = pool.get(pair.key);
+    const existing = candidates && candidates.shift();
+    return existing ? { ...existing, value: pair.value } : newRow(pair.key, pair.value);
+  });
+  const disabled = asArray(existingRows).filter((row) => !row.enabled);
+  return [...rows, ...disabled];
 }
 
 /* --------------------------------------------------------------- tree access */
@@ -286,6 +352,9 @@ export function normalizeResponse(payload) {
       truncated: !!payload.body?.truncated,
       sizeBytes: payload.body?.sizeBytes ?? 0,
     },
+    // The preview limit the sidecar actually enforced: the configured cap for
+    // text, the smaller binary cap for base64 bodies.
+    previewLimitBytes: payload.previewLimitBytes ?? null,
     timing: {
       totalMs: payload.timing?.totalMs ?? null,
       ttfbMs: payload.timing?.ttfbMs ?? null,

@@ -49,6 +49,9 @@
 
   const bodyText = $derived(response ? (response.body.text ?? response.body.base64 ?? "") : "");
   const binary = $derived(!!response && response.body.text == null && !!response.body.base64);
+  // Binary bodies are enforced at a smaller limit than text; the sidecar
+  // reports which one actually applied.
+  const previewLimit = $derived(response?.previewLimitBytes ?? truncatedLimit);
   const parsed = $derived(
     response && response.body.text && !binary ? parseJson(response.body.text) : { ok: false },
   );
@@ -178,7 +181,7 @@
         {#if response.body.truncated}
           <p class="notice notice--warning" role="status">
             <Icon name="alert" />
-            <span>{t("truncatedNote", { cap: formatBytes(truncatedLimit), shown: formatBytes(response.body.sizeBytes) })}</span>
+            <span>{t("truncatedNote", { cap: formatBytes(previewLimit), shown: formatBytes(response.body.sizeBytes) })}</span>
           </p>
         {/if}
         <div class="response-toolbar">

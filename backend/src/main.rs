@@ -16,6 +16,10 @@ use crate::exec::InFlightRegistry;
 use crate::model::{ApiError, ExecOutcome};
 use crate::persist::{FilePersistence, PersistenceAdapter};
 
+/// Must equal manifest.json `id`; asserted against the manifest by the test
+/// below because a mismatch makes the host terminate the sidecar at handshake.
+const PLUGIN_ID: &str = "io.dbx.api-studio";
+
 struct Plugin {
     registry: InFlightRegistry,
     storage: Option<FilePersistence>,
@@ -126,6 +130,7 @@ fn response_json(payload: model::ResponsePayload) -> Value {
         body_base64,
         body_truncated,
         body_bytes,
+        body_preview_limit,
         final_url,
         redirect_count,
         total_ms,
@@ -146,6 +151,7 @@ fn response_json(payload: model::ResponsePayload) -> Value {
             "truncated": body_truncated,
             "sizeBytes": body_bytes
         },
+        "previewLimitBytes": body_preview_limit,
         "finalUrl": final_url,
         "redirectCount": redirect_count,
         "timing": {
@@ -170,6 +176,33 @@ fn main() -> std::io::Result<()> {
         registry: InFlightRegistry::default(),
         storage,
     };
-    let metadata = PluginMetadata::new("io.dbx.api-studio", env!("CARGO_PKG_VERSION"));
+    let metadata = PluginMetadata::new(PLUGIN_ID, env!("CARGO_PKG_VERSION"));
     PluginServer::new(metadata, plugin).serve()
+}
+
+#[cfg(test)]
+mod tests {
+    /// The `plugin/initialize` response must echo the manifest identity or the
+    /// host kills the sidecar ("Sidecar identity or protocol does not match
+    /// manifest"). The version lives in Cargo.toml while the manifest is a
+    /// separate file, so a release bump that touches only one of them breaks
+    /// startup at runtime — pin them together here.
+    #[test]
+    fn sidecar_identity_matches_manifest() {
+        let manifest_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../manifest.json");
+        let manifest = std::fs::read_to_string(manifest_path)
+            .expect("manifest.json must be readable next to the backend crate");
+        let manifest: serde_json::Value = serde_json::from_str(&manifest)
+            .expect("manifest.json must be valid JSON");
+        assert_eq!(
+            manifest["id"].as_str(),
+            Some(super::PLUGIN_ID),
+            "manifest id and the sidecar's PLUGIN_ID diverged"
+        );
+        assert_eq!(
+            manifest["version"].as_str(),
+            Some(env!("CARGO_PKG_VERSION")),
+            "manifest version and Cargo.toml version diverged — bump both together"
+        );
+    }
 }

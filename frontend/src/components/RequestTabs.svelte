@@ -119,7 +119,15 @@
     {#if issues.auth?.unresolved?.length}
       {@render fieldError(t("unresolvedVars", { vars: issues.auth.unresolved.join(", ") }))}
     {/if}
-    <AuthEditor auth={request.auth} {t} onChange={onChange} onOpenEnvironments={onOpenEnvironments} />
+    <AuthEditor
+      auth={request.auth}
+      {t}
+      onChange={(nextAuth) => {
+        request.auth = nextAuth;
+        onChange();
+      }}
+      onOpenEnvironments={onOpenEnvironments}
+    />
   {:else if activeTab === "body"}
     {#if issues.body?.json}
       {@render fieldError(t("jsonInvalid"))}

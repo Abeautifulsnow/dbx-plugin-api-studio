@@ -395,6 +395,45 @@ try {
         ),
       );
     }
+
+    /* 8. regression: switching the auth type must reach the sidecar spec.
+       The AuthEditor once swapped its local prop copy only, so the request
+       kept the old auth, the token the user typed landed in an orphan object,
+       and the UI snapped back on remount. */
+    await evaluate(
+      "[...document.querySelectorAll('.tabs__tab')].find((button) => button.textContent.trim() === 'Auth')?.click()",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await evaluate(
+      "[...document.querySelectorAll('.auth__option')].find((button) => button.textContent.includes('Bearer'))?.click()",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const tokenFilled = await evaluate(
+      "(() => { const input = document.querySelector('#auth-token'); if (!input) return 'missing'; input.value = 'boot-token-123'; input.dispatchEvent(new Event('input', { bubbles: true })); return 'ok'; })()",
+    );
+    check("bearer token field is rendered after switching auth type", tokenFilled === "ok", tokenFilled);
+    await evaluate("document.querySelector('.btn.send')?.click()");
+    await waitFor(
+      "window.__calls.filter((call) => call.method === 'api/request').length >= 2",
+      "the second send",
+      8000,
+    );
+    const sentHeaders = await evaluate(
+      "JSON.stringify(window.__calls.filter((call) => call.method === 'api/request').at(-1)?.params?.headers ?? [])",
+    );
+    check(
+      "auth type switch + typed token reach the request spec",
+      sentHeaders.includes('"Authorization"') && sentHeaders.includes("Bearer boot-token-123"),
+      sentHeaders,
+    );
+    // The child must show the parent's auth (not a stale local copy): the
+    // active option stays Bearer with the token still in place.
+    check(
+      "auth editor still shows Bearer after the parent round-trip",
+      (await evaluate(
+        "[...document.querySelectorAll('.auth__option')].find((button) => button.textContent.includes('Bearer'))?.classList.contains('auth__option--active') ?? false",
+      )) === true,
+    );
   }
 } catch (error) {
   failures += 1;

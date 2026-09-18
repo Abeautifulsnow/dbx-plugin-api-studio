@@ -19,11 +19,12 @@
   let revealed = $state(false);
 
   function selectType(id) {
-    // Replace the object instead of clearing fields: a stale token from the
-    // previous type must not survive in memory.
-    auth = { type: id };
+    // Report the replacement instead of reassigning the prop: a local
+    // `auth = { type: id }` never reaches the parent's request object, so the
+    // sidecar would still see the old auth. A fresh object also guarantees a
+    // stale token from the previous type does not survive in memory.
     revealed = false;
-    onChange();
+    onChange(id === "apikey" ? { type: id, in: "header" } : { type: id });
   }
 </script>
 
@@ -59,7 +60,7 @@
             type={revealed ? "text" : "password"}
             bind:value={auth.token}
             spellcheck="false"
-            oninput={onChange}
+            oninput={() => onChange(auth)}
           />
           <button
             type="button"
@@ -75,7 +76,7 @@
     {:else if auth.type === "basic"}
       <div class="field">
         <label class="field__label" for="auth-user">{t("usernameLabel")}</label>
-        <input id="auth-user" class="input" bind:value={auth.username} spellcheck="false" oninput={onChange} />
+        <input id="auth-user" class="input" bind:value={auth.username} spellcheck="false" oninput={() => onChange(auth)} />
       </div>
       <div class="field">
         <label class="field__label" for="auth-password">{t("passwordLabel")}</label>
@@ -86,7 +87,7 @@
             type={revealed ? "text" : "password"}
             bind:value={auth.password}
             spellcheck="false"
-            oninput={onChange}
+            oninput={() => onChange(auth)}
           />
           <button
             type="button"
@@ -107,7 +108,7 @@
           class="input mono"
           bind:value={auth.keyName}
           spellcheck="false"
-          oninput={onChange}
+          oninput={() => onChange(auth)}
         />
       </div>
       <div class="field">
@@ -119,7 +120,7 @@
             type={revealed ? "text" : "password"}
             bind:value={auth.keyValue}
             spellcheck="false"
-            oninput={onChange}
+            oninput={() => onChange(auth)}
           />
           <button
             type="button"
@@ -134,7 +135,7 @@
       </div>
       <div class="field">
         <label class="field__label" for="auth-in">{t("authIn")}</label>
-        <select id="auth-in" class="select" bind:value={auth.in} onchange={onChange}>
+        <select id="auth-in" class="select" bind:value={auth.in} onchange={() => onChange(auth)}>
           <option value="header">{t("authHeader")}</option>
           <option value="query">{t("authQuery")}</option>
         </select>

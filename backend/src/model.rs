@@ -17,6 +17,11 @@ pub const MAX_TIMEOUT_MS: u64 = 300_000;
 pub const MAX_BODY_BYTES_CEILING: usize = 6 * 1024 * 1024;
 pub const MIN_BODY_BYTES: usize = 256 * 1024;
 pub const DEFAULT_BODY_BYTES: usize = 2 * 1024 * 1024;
+/// Binary bodies travel as base64 (a 4/3 expansion) inside the same 8 MiB
+/// JSON-RPC message, so a binary preview near the 6 MiB text ceiling would
+/// overflow the transport and the whole response would be rejected. Binary
+/// previews therefore stop at 4 MiB raw (~5.3 MiB encoded).
+pub const MAX_BINARY_PREVIEW_BYTES: usize = 4 * 1024 * 1024;
 
 pub const METHODS: [&str; 5] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 
@@ -152,6 +157,11 @@ pub struct ResponsePayload {
     pub body_base64: Option<String>,
     pub body_truncated: bool,
     pub body_bytes: u64,
+    /// The preview limit actually applied to this body: the configured cap for
+    /// text, or the smaller binary cap for base64-encoded bodies. The UI shows
+    /// this in the truncation notice so it never quotes a limit that was not
+    /// the one enforced.
+    pub body_preview_limit: u64,
     pub final_url: String,
     pub redirect_count: u32,
     pub total_ms: u64,

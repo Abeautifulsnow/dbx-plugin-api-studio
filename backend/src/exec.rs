@@ -174,16 +174,34 @@ async fn run_request_inner(spec: &ValidatedRequest) -> Result<ResponsePayload, A
         }
         body.extend_from_slice(&chunk);
     }
-    let body_bytes = body.len() as u64;
     let total_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     let download_ms = total_ms.saturating_sub(ttfb_ms);
 
-    let (body_text, body_base64) = match String::from_utf8(body) {
-        Ok(text) => (Some(text), None),
-        Err(raw) => (
-            None,
-            Some(base64::engine::general_purpose::STANDARD.encode(raw.into_bytes())),
-        ),
+    let (body_text, body_base64, body_bytes, preview_limit, truncated) = match String::from_utf8(body)
+    {
+        Ok(text) => {
+            let received = text.len() as u64;
+            (Some(text), None, received, max_bytes as u64, truncated)
+        }
+        Err(err) => {
+            let raw = err.into_bytes();
+            // Binary travels base64-encoded inside the same 8 MiB JSON-RPC
+            // message; a 6 MiB binary would encode to exactly 8 MiB and the
+            // transport would drop the entire response. Clamp the binary
+            // preview and tell the UI which limit was enforced. body_bytes
+            // reports the preview actually delivered, matching the text path
+            // where the read loop stops at the cap.
+            let limit = max_bytes.min(crate::model::MAX_BINARY_PREVIEW_BYTES);
+            let delivered = limit.min(raw.len());
+            let encoded = base64::engine::general_purpose::STANDARD.encode(&raw[..delivered]);
+            (
+                None,
+                Some(encoded),
+                delivered as u64,
+                limit as u64,
+                truncated || delivered < raw.len(),
+            )
+        }
     };
 
     Ok(ResponsePayload {
@@ -196,6 +214,7 @@ async fn run_request_inner(spec: &ValidatedRequest) -> Result<ResponsePayload, A
         body_base64,
         body_truncated: truncated,
         body_bytes,
+        body_preview_limit: preview_limit,
         final_url,
         redirect_count,
         total_ms,
@@ -477,6 +496,71 @@ mod tests {
         };
         assert!(payload.body_truncated);
         assert!((payload.body_bytes as usize) <= 256 * 1024);
+        assert_eq!(payload.body_preview_limit, 256 * 1024);
+    }
+
+    /// `spawn_server` twin that serves raw bytes: a `&str` is valid UTF-8 by
+    /// construction, so the binary body path needs its own server.
+    fn spawn_binary_server(
+        head: &str,
+        body: &[u8],
+    ) -> (std::net::SocketAddr, std::thread::JoinHandle<()>) {
+        let mut wire = Vec::with_capacity(head.len() + 64 + body.len());
+        wire.extend_from_slice(head.as_bytes());
+        wire.extend_from_slice(
+            format!("Content-Length: {}\r\nConnection: close\r\n\r\n", body.len()).as_bytes(),
+        );
+        wire.extend_from_slice(body);
+        let wire: &'static [u8] = Box::leak(wire.into_boxed_slice());
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let Ok((mut socket, _)) = listener.accept() else {
+                return;
+            };
+            let mut buf = [0u8; 4096];
+            let _ = socket.read(&mut buf);
+            let _ = socket.write_all(wire);
+        });
+        (addr, handle)
+    }
+
+    #[test]
+    fn binary_preview_stops_below_the_transport_limit() {
+        // 5 MiB of non-UTF-8 bytes under the maximum text cap: base64 of a
+        // 6 MiB binary would be exactly 8 MiB — the JSON-RPC single-message
+        // limit — so binary previews must clamp at MAX_BINARY_PREVIEW_BYTES
+        // (4 MiB raw, ~5.3 MiB encoded) and report that limit to the UI.
+        let body = vec![0x80u8; 5 * 1024 * 1024];
+        let (addr, server) = spawn_binary_server(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n",
+            &body,
+        );
+        let mut spec = spec_json("GET", &format!("http://{addr}/bin"));
+        spec["settings"]["maxBodyBytes"] = serde_json::json!(6 * 1024 * 1024);
+        let outcome = run(spec);
+        server.join().unwrap();
+        let ExecOutcome::Response(payload) = outcome else {
+            panic!("expected a response, got {outcome:?}")
+        };
+        assert!(payload.body_text.is_none());
+        assert!(payload.body_truncated);
+        assert_eq!(
+            payload.body_preview_limit,
+            crate::model::MAX_BINARY_PREVIEW_BYTES as u64
+        );
+        let encoded = payload.body_base64.expect("binary body must be base64");
+        assert_eq!(
+            encoded.len(),
+            crate::model::MAX_BINARY_PREVIEW_BYTES.div_ceil(3) * 4
+        );
+        // body_bytes reports the preview delivered to the UI, not the larger
+        // received size — the truncation notice quotes it as "showing the
+        // first {shown}".
+        assert_eq!(payload.body_bytes, crate::model::MAX_BINARY_PREVIEW_BYTES as u64);
+        // The encoded preview must fit the transport with envelope headroom.
+        assert!(encoded.len() < 8 * 1024 * 1024);
     }
 
     #[test]

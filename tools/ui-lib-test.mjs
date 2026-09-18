@@ -135,7 +135,11 @@ check("query pairs are decoded", parsed.pairs.length === 3 && parsed.pairs[1].va
 check("encoded pairs are decoded", parsed.pairs[2].value === "密");
 check("base excludes the query", parsed.base === "https://x.test/v1");
 check("rebuild preserves the fragment", rebuildUrlQuery("https://x.test/v1#frag", [{ key: "a", value: "1" }]) === "https://x.test/v1?a=1#frag");
-check("rebuild with no pairs drops the query", rebuildUrlQuery("https://x.test/v1?a=1", []).startsWith("https://x.test/v1"));
+check(
+  "rebuild REPLACES an existing query instead of appending to it",
+  rebuildUrlQuery("https://x.test/v1?old=1", [{ key: "new", value: "2" }]) === "https://x.test/v1?new=2",
+);
+check("rebuild with no pairs strips the query", rebuildUrlQuery("https://x.test/v1?a=1", []) === "https://x.test/v1");
 check("appendQueryParam preserves the fragment", appendQueryParam("https://x.test/v1#f", "k", "v") === "https://x.test/v1?k=v#f");
 check("appendQueryParam encodes", appendQueryParam("https://x.test/v1", "a b", "c&d") === "https://x.test/v1?a%20b=c%26d");
 

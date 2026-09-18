@@ -10,6 +10,7 @@
 
 use std::fs;
 use std::io;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -68,10 +69,37 @@ pub fn storage_dir() -> io::Result<PathBuf> {
     Ok(base.join("dbx-plugin-api-studio"))
 }
 
+/// Replace `path` with `contents` via temp file + rename.
+///
+/// `fs::rename` replaces an existing destination on every platform we ship
+/// (Windows: MoveFileExW with MOVEFILE_REPLACE_EXISTING), so the swap itself is
+/// atomic. The two real-world Windows failure modes are handled here: no fsync
+/// before the rename (durability on power loss), and transient sharing
+/// violations when antivirus/indexers hold the destination briefly.
 fn write_atomic(path: &PathBuf, contents: &str) -> io::Result<()> {
     let tmp = path.with_extension("tmp");
-    fs::write(&tmp, contents)?;
-    fs::rename(&tmp, path)
+    {
+        let mut file = fs::File::create(&tmp)?;
+        file.write_all(contents.as_bytes())?;
+        file.sync_all()?;
+    }
+    for attempt in 0..3 {
+        match fs::rename(&tmp, path) {
+            Ok(()) => return Ok(()),
+            Err(err) if attempt < 2 && is_transient_lock(&err) => {
+                std::thread::sleep(std::time::Duration::from_millis(50 * (attempt as u64 + 1)));
+            }
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(())
+}
+
+/// Windows sharing/lock violations surface as raw OS errors 32/33; some layers
+/// report them as PermissionDenied. Only those are worth retrying.
+fn is_transient_lock(err: &io::Error) -> bool {
+    matches!(err.raw_os_error(), Some(32) | Some(33))
+        || err.kind() == io::ErrorKind::PermissionDenied
 }
 
 fn read_json_file(path: &PathBuf) -> io::Result<Option<Value>> {
@@ -264,5 +292,19 @@ mod tests {
         std::env::set_var("API_STUDIO_DATA_DIR", &dir);
         assert_eq!(storage_dir().unwrap(), dir);
         std::env::remove_var("API_STUDIO_DATA_DIR");
+    }
+
+    #[test]
+    fn atomic_write_replaces_existing_file_repeatedly() {
+        // Pins the behaviour the whole save path relies on: rename replaces an
+        // existing destination (the "second save fails on Windows" concern),
+        // and repeated writes leave no temp file behind.
+        let dir = temp_dir("atomic");
+        let path = dir.join("target.json");
+        for contents in ["first", "second", "third"] {
+            write_atomic(&path, contents).unwrap();
+            assert_eq!(fs::read_to_string(&path).unwrap(), contents);
+            assert!(!dir.join("target.tmp").exists());
+        }
     }
 }
