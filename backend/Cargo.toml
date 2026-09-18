@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 
+# Library facade: integration tests (tests/wire_contract_tests.rs) reuse the
+# binary's modules through this target instead of include! hacks.
+[lib]
+name = "dbx_plugin_api_studio"
+path = "src/lib.rs"
+
 [workspace]
 
 [dependencies]

@@ -1,0 +1,201 @@
+{
+  "generatedFrom": "tools/ui-lib-test.mjs (buildSendSpec)",
+  "cases": [
+    {
+      "name": "custom proxy",
+      "spec": {
+        "requestId": "wire-1",
+        "method": "POST",
+        "url": "https://api.test/v1/items",
+        "headers": [
+          {
+            "name": "Accept",
+            "value": "application/json"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "type": "raw",
+          "text": "{\"a\":1}"
+        },
+        "jarKey": null,
+        "settings": {
+          "timeoutMs": 300000,
+          "followRedirects": false,
+          "maxRedirects": 20,
+          "verifyTls": false,
+          "maxBodyBytes": 2097152,
+          "proxy": {
+            "mode": "custom",
+            "url": "socks5://127.0.0.1:1080",
+            "username": "u",
+            "password": "p"
+          }
+        }
+      },
+      "expect": {
+        "proxy_mode": "custom",
+        "proxy_url": "socks5://127.0.0.1:1080",
+        "proxy_user": "u"
+      }
+    },
+    {
+      "name": "proxy none",
+      "spec": {
+        "requestId": "wire-2",
+        "method": "POST",
+        "url": "https://api.test/v1/items",
+        "headers": [
+          {
+            "name": "Accept",
+            "value": "application/json"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "type": "raw",
+          "text": "{\"a\":1}"
+        },
+        "jarKey": null,
+        "settings": {
+          "timeoutMs": 300000,
+          "followRedirects": false,
+          "maxRedirects": 20,
+          "verifyTls": false,
+          "maxBodyBytes": 2097152,
+          "proxy": {
+            "mode": "none"
+          }
+        }
+      },
+      "expect": {
+        "proxy_mode": "none"
+      }
+    },
+    {
+      "name": "system proxy default",
+      "spec": {
+        "requestId": "wire-3",
+        "method": "POST",
+        "url": "https://api.test/v1/items",
+        "headers": [
+          {
+            "name": "Accept",
+            "value": "application/json"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "type": "raw",
+          "text": "{\"a\":1}"
+        },
+        "jarKey": null,
+        "settings": {
+          "timeoutMs": 300000,
+          "followRedirects": false,
+          "maxRedirects": 20,
+          "verifyTls": false,
+          "maxBodyBytes": 2097152,
+          "proxy": {
+            "mode": "system"
+          }
+        }
+      },
+      "expect": {
+        "proxy_mode": "system"
+      }
+    },
+    {
+      "name": "multipart through the wire",
+      "spec": {
+        "requestId": "wire-4",
+        "method": "POST",
+        "url": "https://api.test/upload",
+        "headers": [
+          {
+            "name": "Accept",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "type": "multipart",
+          "parts": [
+            {
+              "name": "note",
+              "kind": "text",
+              "value": "hello",
+              "path": ""
+            },
+            {
+              "name": "doc",
+              "kind": "file",
+              "value": "",
+              "path": "/tmp/me.png"
+            }
+          ]
+        },
+        "jarKey": null,
+        "settings": {
+          "timeoutMs": 300000,
+          "followRedirects": false,
+          "maxRedirects": 20,
+          "verifyTls": false,
+          "maxBodyBytes": 2097152,
+          "proxy": {
+            "mode": "system"
+          }
+        }
+      },
+      "expect": {
+        "body_type": "multipart",
+        "part_count": 2,
+        "content_type_header": "dropped"
+      }
+    },
+    {
+      "name": "jar key",
+      "spec": {
+        "requestId": "wire-5",
+        "method": "POST",
+        "url": "https://api.test/v1/items",
+        "headers": [
+          {
+            "name": "Accept",
+            "value": "application/json"
+          },
+          {
+            "name": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "type": "raw",
+          "text": "{\"a\":1}"
+        },
+        "jarKey": "col_42",
+        "settings": {
+          "timeoutMs": 300000,
+          "followRedirects": false,
+          "maxRedirects": 20,
+          "verifyTls": false,
+          "maxBodyBytes": 2097152,
+          "proxy": {
+            "mode": "system"
+          }
+        }
+      },
+      "expect": {
+        "jar_key": "col_42"
+      }
+    }
+  ]
+}

@@ -4,10 +4,9 @@
 //! writes request/response content to stderr either — logs are limited to
 //! non-sensitive lifecycle lines, keeping secrets out of diagnostics.
 
-mod curl;
-mod exec;
-mod model;
-mod persist;
+// Modules live in the lib target (src/lib.rs) so integration tests can reuse
+// them; the sidecar protocol entry point stays here.
+use dbx_plugin_api_studio::{curl, exec, model, persist};
 
 use dbx_plugin_sdk::{PluginEmitter, PluginError, PluginHandler, PluginMetadata, PluginServer, RequestContext};
 use serde_json::{json, Value};

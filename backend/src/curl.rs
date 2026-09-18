@@ -80,6 +80,27 @@ pub fn export(spec_value: serde_json::Value) -> Result<String, crate::model::Api
         parts.push("--insecure".to_string());
     }
 
+    // "Copy as cURL reproduces the request" — that includes the transport
+    // route, so a custom proxy must appear in the command.
+    match &validated.proxy {
+        crate::model::ProxyPlan::None => parts.push("--noproxy".to_string()),
+        crate::model::ProxyPlan::Custom {
+            url,
+            username: Some(username),
+            password: Some(password),
+        } => {
+            parts.push("--proxy".to_string());
+            parts.push(shell_quote(url));
+            parts.push("--proxy-user".to_string());
+            parts.push(shell_quote(&format!("{username}:{password}")));
+        }
+        crate::model::ProxyPlan::Custom { url, .. } => {
+            parts.push("--proxy".to_string());
+            parts.push(shell_quote(url));
+        }
+        crate::model::ProxyPlan::System => {}
+    }
+
     Ok(parts.join(" "))
 }
 
@@ -381,12 +402,20 @@ pub fn parse_import(input: &str) -> Result<Value, ApiError> {
 
     // An Authorization header folds into the auth model so the editor can
     // manage the credential (masked, session-only) instead of a raw header.
+    // A Content-Type is only folded when a body model consumes it (json /
+    // urlencoded); anything else (application/xml, application/graphql, vendor
+    // types) must survive as a header or the imported request would silently
+    // send text/plain instead.
     let mut content_type: Option<String> = None;
     headers.retain(|(name, value)| {
         let lower = name.to_ascii_lowercase();
         if lower == "content-type" {
-            content_type = Some(value.clone());
-            return false;
+            let value_lower = value.to_ascii_lowercase();
+            if value_lower.contains("json") || value_lower.contains("x-www-form-urlencoded") {
+                content_type = Some(value.clone());
+                return false;
+            }
+            return true;
         }
         if lower == "authorization" {
             if let Some(token) = value
@@ -436,7 +465,9 @@ pub fn parse_import(input: &str) -> Result<Value, ApiError> {
         url = append_query(&url, &data);
     } else if !data_parts.is_empty() || has_urlencode {
         // Plain `-d` posts urlencoded by default; an explicit JSON content
-        // type keeps the body raw/JSON instead.
+        // type keeps the body JSON instead. Anything else stays as a plain
+        // text body (`text` — a type the editor knows), keeping the original
+        // Content-Type header intact.
         let raw_text = data_parts.join("&");
         let is_json = content_type
             .as_deref()
@@ -452,7 +483,8 @@ pub fn parse_import(input: &str) -> Result<Value, ApiError> {
                 parse_urlencoded_pairs(&raw_text)
             };
             // Only represent the body as rows when they round-trip to the same
-            // bytes; otherwise stay raw so no data is lost through the editor.
+            // bytes; otherwise stay as plain text so no data is lost through
+            // the editor.
             if !rows.is_empty() && serialize_urlencoded_pairs(&rows) == raw_text {
                 body_kind = "urlencoded";
                 body_text = raw_text;
@@ -462,7 +494,7 @@ pub fn parse_import(input: &str) -> Result<Value, ApiError> {
                 body_text = serialize_urlencoded_pairs(&rows);
                 body_rows = rows;
             } else {
-                body_kind = "raw";
+                body_kind = "text";
                 body_text = raw_text;
             }
         }
@@ -529,8 +561,16 @@ pub fn parse_import(input: &str) -> Result<Value, ApiError> {
 }
 
 fn append_query(url: &str, query: &str) -> String {
-    let separator = if url.contains('?') { "&" } else { "?" };
-    format!("{url}{separator}{query}")
+    // Decide the separator from the fragment-less base: a fragment may legally
+    // contain "?" and must not make an existing-query URL out of one that only
+    // has a fragment (mirrors the UI's appendQueryParam fix).
+    let hash_index = url.find('#');
+    let (base, hash) = match hash_index {
+        Some(index) => (&url[..index], &url[index..]),
+        None => (url, ""),
+    };
+    let separator = if base.contains('?') { "&" } else { "?" };
+    format!("{base}{separator}{query}{hash}")
 }
 
 /// Best-effort decode of `a=1&b=2` style text into rows, so imported
@@ -755,5 +795,67 @@ mod tests {
         let imported = import("curl -I --url 'https://api.test/x'");
         assert_eq!(imported["request"]["method"], "HEAD");
         assert_eq!(imported["request"]["url"], "https://api.test/x");
+    }
+
+    #[test]
+    fn import_keeps_non_json_content_type_as_a_header() {
+        // The body model only consumes json/urlencoded content types; anything
+        // else must survive as a header or the imported request would silently
+        // send text/plain instead of the original type.
+        let imported = import(
+            "curl https://x.test -H 'Content-Type: application/xml' -d '<hello />'",
+        );
+        let request = &imported["request"];
+        assert_eq!(request["body"]["type"], "text");
+        let headers = request["headers"].as_array().unwrap();
+        assert!(
+            headers.iter().any(|header| header["key"] == "Content-Type"
+                && header["value"] == "application/xml"),
+            "{headers:?}"
+        );
+    }
+
+    #[test]
+    fn import_get_with_data_honors_a_fragment_containing_a_question_mark() {
+        let imported = import("curl -G 'https://x.test/users#docs?foo' -d 'a=1'");
+        assert_eq!(imported["request"]["url"], "https://x.test/users?a=1#docs?foo");
+    }
+
+    #[test]
+    fn import_never_emits_a_raw_body_type() {
+        // "raw" is a transport-side concept; the editor only knows
+        // none/json/text/urlencoded/multipart.
+        let imported = import("curl https://x.test -H 'Content-Type: application/octet-stream' -d 'binary-ish'");
+        assert_eq!(imported["request"]["body"]["type"], "text");
+    }
+
+    #[test]
+    fn export_includes_a_custom_proxy() {
+        // "Copy as cURL reproduces the request" — the transport route included.
+        let curl = export_json(json!({
+            "requestId": "r1",
+            "method": "GET",
+            "url": "https://api.test/x",
+            "headers": [],
+            "body": { "type": "none" },
+            "jarKey": null,
+            "settings": { "proxy": { "mode": "custom", "url": "http://127.0.0.1:8080", "username": "u", "password": "it's" } }
+        }));
+        assert!(curl.contains("--proxy 'http://127.0.0.1:8080'"), "{curl}");
+        assert!(curl.contains("--proxy-user 'u:it'\\''s'"), "{curl}");
+    }
+
+    #[test]
+    fn export_flags_noproxy_when_disabled() {
+        let curl = export_json(json!({
+            "requestId": "r1",
+            "method": "GET",
+            "url": "https://api.test/x",
+            "headers": [],
+            "body": { "type": "none" },
+            "jarKey": null,
+            "settings": { "proxy": { "mode": "none" } }
+        }));
+        assert!(curl.contains("--noproxy"), "{curl}");
     }
 }

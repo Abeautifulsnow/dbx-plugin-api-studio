@@ -160,6 +160,7 @@ export const DICTIONARIES = {
     nextRequestCancelled: "Send again when you are ready.",
     nextTooManyRedirects: "Raise the redirect limit in Settings, or fix the redirect loop.",
     nextBodyTooLarge: "Raise the response preview limit in Settings.",
+    nextProxyFailed: "The custom proxy refused or could not resolve the connection. Check the proxy address and credentials in Settings.",
     nextInternalError: "Retry the request; if it keeps failing, check the sidecar logs.",
     bodyNotRestored: "The request body was not stored in history and needs to be re-entered.",
     revealValue: "Reveal value",
@@ -386,6 +387,7 @@ export const DICTIONARIES = {
     nextRequestCancelled: "准备好后可重新发送。",
     nextTooManyRedirects: "请在设置中提高重定向上限，或修复重定向循环。",
     nextBodyTooLarge: "请在设置中提高响应预览上限。",
+    nextProxyFailed: "自定义代理拒绝或无法解析连接。请在设置中检查代理地址与凭据。",
     nextInternalError: "请重试；若持续失败，请检查 Sidecar 日志。",
     bodyNotRestored: "请求体不会写入历史记录，需要重新填写。",
     revealValue: "显示值",
@@ -472,6 +474,7 @@ export const NEXT_STEP_KEYS = {
   REQUEST_CANCELLED: "nextRequestCancelled",
   TOO_MANY_REDIRECTS: "nextTooManyRedirects",
   BODY_TOO_LARGE: "nextBodyTooLarge",
+  PROXY_FAILED: "nextProxyFailed",
   INTERNAL_ERROR: "nextInternalError",
 };
 

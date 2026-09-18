@@ -27,6 +27,12 @@ pub const METHODS: [&str; 7] = [
     "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS",
 ];
 
+/// Multipart file parts are read into memory before the upload starts
+/// (`reqwest::multipart::Part::bytes`); larger files should stream via
+/// `Part::stream` once the transport moves to framed bodies. Until then a part
+/// above this size is rejected up front instead of allocating blindly.
+pub const MAX_MULTIPART_FILE_BYTES: u64 = 256 * 1024 * 1024;
+
 /// The JSON-RPC transport rejects any single message over 8 MiB. serde_json can
 /// expand control characters up to 6x while escaping, so the byte-based body
 /// cap cannot bound the serialized message by itself: after building a response
@@ -72,7 +78,7 @@ pub fn fit_payload_to_transport(payload: &mut Value) {
 /// Stable error taxonomy (PRD §6.2 plus the RPC-params category). Both the UI
 /// and the sidecar must classify every failure into one of these names so the
 /// workbench can render a predictable cause + next step.
-pub const ERROR_CATEGORIES: [&str; 11] = [
+pub const ERROR_CATEGORIES: [&str; 12] = [
     "INVALID_URL",
     "INVALID_REQUEST",
     "VARIABLE_UNRESOLVED",
@@ -83,6 +89,7 @@ pub const ERROR_CATEGORIES: [&str; 11] = [
     "REQUEST_CANCELLED",
     "TOO_MANY_REDIRECTS",
     "BODY_TOO_LARGE",
+    "PROXY_FAILED",
     "INTERNAL_ERROR",
 ];
 

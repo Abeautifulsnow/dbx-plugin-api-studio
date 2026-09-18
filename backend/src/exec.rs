@@ -141,6 +141,20 @@ async fn run_request_inner(
                     MultipartSource::File { path, filename } => {
                         // The sidecar reads the file with the user's own
                         // permissions; file bytes never cross the RPC bridge.
+                        // Parts load into memory before the upload starts, so
+                        // refuse oversized files instead of allocating blindly.
+                        let metadata = std::fs::metadata(path).map_err(|e| {
+                            ApiError::invalid_request(&format!(
+                                "Cannot read file for multipart part \"{name}\": {}",
+                                sanitize_cause(&e.to_string())
+                            ))
+                        })?;
+                        if metadata.len() > crate::model::MAX_MULTIPART_FILE_BYTES {
+                            return Err(ApiError::invalid_request(&format!(
+                                "Multipart file part \"{name}\" exceeds the {} MB in-memory limit; streaming upload is not supported yet",
+                                crate::model::MAX_MULTIPART_FILE_BYTES / (1024 * 1024)
+                            )));
+                        }
                         let bytes = std::fs::read(path).map_err(|e| {
                             ApiError::invalid_request(&format!(
                                 "Cannot read file for multipart part \"{name}\": {}",
@@ -165,10 +179,11 @@ async fn run_request_inner(
     let builder = builder;
 
     let started = Instant::now();
+    let uses_proxy = matches!(spec.proxy, crate::model::ProxyPlan::Custom { .. });
     let response = builder
         .send()
         .await
-        .map_err(|e| map_send_error(&request_id, e))?;
+        .map_err(|e| map_send_error(&request_id, e, uses_proxy))?;
     let redirect_count = redirect_counter.load(Ordering::Relaxed) as u32;
     // Headers of the final (post-redirect) response have arrived; the wall
     // clock up to here is the honest TTFB this transport can report.
@@ -355,7 +370,7 @@ fn mime_for(filename: &str) -> Option<&'static str> {
 /// transport text can embed the request URL (including userinfo and query
 /// values that may be credentials), so it must never cross the RPC boundary
 /// verbatim.
-fn map_send_error(request_id: &str, error: reqwest::Error) -> ApiError {
+fn map_send_error(request_id: &str, error: reqwest::Error, uses_proxy: bool) -> ApiError {
     let detail = error.to_string();
     let detail_lower = detail.to_lowercase();
     let sanitized = sanitize_cause(&detail);
@@ -372,13 +387,23 @@ fn map_send_error(request_id: &str, error: reqwest::Error) -> ApiError {
             || detail_lower.contains("nodename nor servname")
             || detail_lower.contains("no such host")
         {
-            "DNS_FAILED"
+            // Through a custom proxy, a resolution failure is most plausibly
+            // the proxy host itself.
+            if uses_proxy {
+                "PROXY_FAILED"
+            } else {
+                "DNS_FAILED"
+            }
         } else if detail_lower.contains("certificate")
             || detail_lower.contains("tls")
             || detail_lower.contains("ssl")
             || detail_lower.contains("unknown-protocol")
         {
             "TLS_FAILED"
+        } else if uses_proxy {
+            // With a custom proxy in the path, a refused/dropped connection is
+            // far more likely the proxy than the API server.
+            "PROXY_FAILED"
         } else {
             "CONNECT_FAILED"
         }

@@ -217,19 +217,6 @@ export function buildSendSpec(request, requestId, scope, options = {}) {
         : bodyText == null
           ? { type: "none" }
           : { type: "raw", text: bodyText },
-    // Only non-default proxy plans travel; "system" is the transport default.
-    ...(proxy.mode === "none"
-      ? { proxy: { mode: "none" } }
-      : proxy.mode === "custom"
-        ? {
-            proxy: {
-              mode: "custom",
-              url: proxy.url || "",
-              username: proxy.username || "",
-              password: proxy.password || "",
-            },
-          }
-        : {}),
     jarKey: options.jarKey || null,
     settings: {
       timeoutMs: clampInt(settings.timeoutMs, 1000, 300000, 30000),
@@ -237,6 +224,19 @@ export function buildSendSpec(request, requestId, scope, options = {}) {
       maxRedirects: clampInt(settings.maxRedirects, 0, 20, 10),
       verifyTls: settings.verifyTls !== false,
       maxBodyBytes: previewCapBytes,
+      // The Rust RequestSpec reads the proxy from settings (model.rs);
+      // only non-default plans travel — "system" is the transport default.
+      proxy:
+        proxy.mode === "none"
+          ? { mode: "none" }
+          : proxy.mode === "custom"
+            ? {
+                mode: "custom",
+                url: proxy.url || "",
+                username: proxy.username || "",
+                password: proxy.password || "",
+              }
+            : { mode: "system" },
     },
   };
   return { spec, issues };

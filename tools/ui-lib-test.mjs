@@ -7,6 +7,8 @@
 //   node tools/ui-lib-test.mjs
 
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname } from "node:path";
 import { DICTIONARIES, NEXT_STEP_KEYS, normalizeLocale, translate } from "../frontend/src/lib/i18n.js";
 import { btoaUtf8, clampInt, formatBytes, formatMs, timeAgo } from "../frontend/src/lib/format.js";
 import {
@@ -376,10 +378,14 @@ const proxyCustomSpec = buildSendSpec(
   emptyScope,
 ).spec;
 check(
-  "a custom proxy travels with credentials",
-  JSON.stringify(proxyCustomSpec.proxy) ===
+  "a custom proxy travels in settings.proxy (the Rust wire contract)",
+  JSON.stringify(proxyCustomSpec.settings.proxy) ===
     JSON.stringify({ mode: "custom", url: "socks5://127.0.0.1:1080", username: "u", password: "p" }),
-  JSON.stringify(proxyCustomSpec.proxy),
+  JSON.stringify(proxyCustomSpec.settings.proxy),
+);
+check(
+  "no top-level proxy key is emitted (serde would silently drop it)",
+  !("proxy" in proxyCustomSpec),
 );
 const proxyNoneSpec = buildSendSpec(
   {
@@ -389,15 +395,101 @@ const proxyNoneSpec = buildSendSpec(
   "px2",
   emptyScope,
 ).spec;
-check("proxy none travels as none", JSON.stringify(proxyNoneSpec.proxy) === JSON.stringify({ mode: "none" }));
 check(
-  "system proxy stays implicit (no proxy key)",
-  !("proxy" in buildSendSpec({ ...baseRequest, settings: { ...baseRequest.settings, proxy: { mode: "system" } } }, "px3", emptyScope).spec),
+  "proxy none travels as settings.proxy none",
+  JSON.stringify(proxyNoneSpec.settings.proxy) === JSON.stringify({ mode: "none" }),
+);
+check(
+  "system proxy travels explicitly as settings.proxy system",
+  JSON.stringify(buildSendSpec({ ...baseRequest, settings: { ...baseRequest.settings, proxy: { mode: "system" } } }, "px3", emptyScope).spec.settings.proxy) ===
+    JSON.stringify({ mode: "system" }),
 );
 check(
   "the cookie jar key travels to the spec",
   buildSendSpec(baseRequest, "j1", emptyScope, { jarKey: "col_1" }).spec.jarKey === "col_1" &&
     buildSendSpec(baseRequest, "j2", emptyScope).spec.jarKey === null,
+);
+
+/* --------------------------------------------------- wire contract fixtures */
+
+// Export real specs to a fixture file that backend/src/wire_contract_tests.rs
+// deserializes with serde and validates — the UI→JSON→Rust layer that unit
+// tests on either side cannot cover (a whole proxy feature once shipped with
+// the JS side emitting spec.proxy while Rust read settings.proxy, and both
+// sides' unit tests were green).
+const wireCases = [
+  {
+    name: "custom proxy",
+    spec: buildSendSpec(
+      {
+        ...baseRequest,
+        settings: {
+          ...baseRequest.settings,
+          proxy: { mode: "custom", url: "socks5://127.0.0.1:1080", username: "u", password: "p" },
+        },
+      },
+      "wire-1",
+      emptyScope,
+    ).spec,
+    expect: { proxy_mode: "custom", proxy_url: "socks5://127.0.0.1:1080", proxy_user: "u" },
+  },
+  {
+    name: "proxy none",
+    spec: buildSendSpec(
+      { ...baseRequest, settings: { ...baseRequest.settings, proxy: { mode: "none", url: "", username: "", password: "" } } },
+      "wire-2",
+      emptyScope,
+    ).spec,
+    expect: { proxy_mode: "none" },
+  },
+  {
+    name: "system proxy default",
+    spec: buildSendSpec(baseRequest, "wire-3", emptyScope).spec,
+    expect: { proxy_mode: "system" },
+  },
+  {
+    name: "multipart through the wire",
+    spec: buildSendSpec(
+      {
+        ...baseRequest,
+        url: "https://api.test/upload",
+        body: {
+          type: "multipart",
+          rows: [
+            { id: "p1", name: "note", kind: "text", value: "hello", enabled: true },
+            { id: "p2", name: "doc", kind: "file", path: "/tmp/me.png", enabled: true },
+          ],
+        },
+      },
+      "wire-4",
+      emptyScope,
+    ).spec,
+    expect: { body_type: "multipart", part_count: 2, content_type_header: "dropped" },
+  },
+  {
+    name: "jar key",
+    spec: buildSendSpec(baseRequest, "wire-5", emptyScope, { jarKey: "col_42" }).spec,
+    expect: { jar_key: "col_42" },
+  },
+];
+
+const { writeFileSync: writeFixture, mkdirSync } = await import("node:fs");
+const fixturePath = new URL("../backend/tests/fixtures/wire_specs.json", import.meta.url);
+mkdirSync(dirname(fileURLToPath(fixturePath)), { recursive: true });
+const existing = (() => {
+  try {
+    return JSON.parse(readFileSync(fixturePath, "utf8"));
+  } catch {
+    return {};
+  }
+})();
+existing.generatedFrom = "tools/ui-lib-test.mjs (buildSendSpec)";
+existing.cases = wireCases.map(({ name, spec, expect }) => ({ name, spec, expect }));
+writeFixture(fixturePath, JSON.stringify(existing, null, 2) + "\n");
+check(
+  "wire fixtures exported for the Rust contract test",
+  existing.cases.length === wireCases.length,
+  `${existing.cases.length} cases`,
 );
 
 console.log(failures ? `LIBRARY CHECKS FAILED (${failures})` : "ALL LIBRARY CHECKS PASSED");
