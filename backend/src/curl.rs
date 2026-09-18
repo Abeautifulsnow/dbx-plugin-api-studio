@@ -240,12 +240,28 @@ enum AuthKind {
     },
 }
 
-/// Recover an editor request from a pasted cURL command. Only the flags that
-/// map onto the v0.1 request model are interpreted; anything else is collected
-/// as a warning instead of failing the import. The one exception is a body the
-/// model cannot express at all (`--data-binary @file`): continuing would yield
-/// a request that differs from the pasted command in method AND body, so it
-/// fails the import outright.
+/// Short flags that only affect curl's own output/UX — never the request on
+/// the wire — are ignored with a warning. Everything else unknown BLOCKS the
+/// import: an unrecognized option may consume the next token, and guessing
+/// would silently corrupt the request (`--connect-timeout 5` would turn `5`
+/// into the URL). For an API tool, importing less beats importing wrong.
+const SHORT_IGNORABLE_FLAGS: &[char] = &['s', 'S', 'v', 'i', '#'];
+const LONG_IGNORABLE_FLAGS: &[&str] = &[
+    "--silent",
+    "--show-error",
+    "--verbose",
+    "--include",
+    "--progress-bar",
+    "--no-buffer",
+    "--compressed",
+];
+
+/// Recover an editor request from a pasted cURL command. Flags that map onto
+/// the v0.1 request model are interpreted; pure display flags are ignored
+/// with a warning; anything else fails the import outright, because an
+/// unrecognized option may consume the next token and silently produce a
+/// different request. File-backed bodies (`-d @file` and friends) fail for
+/// the same reason: the body model cannot express them.
 pub fn parse_import(input: &str) -> Result<Value, ApiError> {
     let words = tokenize(input);
     let mut args: &[String] = words.as_slice();
@@ -273,6 +289,7 @@ pub fn parse_import(input: &str) -> Result<Value, ApiError> {
     let mut follow_redirects: Option<bool> = None;
     let mut timeout_ms: Option<u64> = None;
     let mut force_get = false;
+    let mut end_of_options = false;
     let mut ignored: Vec<String> = Vec::new();
 
     let mut index = 0;
@@ -280,6 +297,14 @@ pub fn parse_import(input: &str) -> Result<Value, ApiError> {
         let arg = args[index].as_str();
         let value = || args.get(index + 1).map(|value| value.as_str());
         match arg {
+            // `--` ends option parsing: curl treats every following token as
+            // a literal (the URL), even if it looks like a flag.
+            arg if end_of_options => {
+                if url.is_none() {
+                    url = Some(arg.to_string());
+                }
+            }
+            "--" => end_of_options = true,
             "-X" | "--request" => {
                 if let Some(value) = value() {
                     method = Some(value.to_ascii_uppercase());
@@ -307,15 +332,15 @@ pub fn parse_import(input: &str) -> Result<Value, ApiError> {
             "-d" | "--data" | "--data-raw" | "--data-ascii" | "--data-binary" => {
                 if let Some(value) = value() {
                     index += 1;
-                    // --data-raw is literal by definition, but --data-binary
-                    // @file reads a (binary) file the body model cannot
-                    // represent. Fail the import outright: continuing would
-                    // yield a body-less draft whose method defaults to GET —
-                    // a request that differs from the pasted command in both
-                    // method and body.
-                    if arg == "--data-binary" && value.starts_with('@') {
+                    // Every data option except --data-raw reads `@file` and
+                    // posts the file's contents — the body model has no
+                    // file-backed body. A draft carrying the literal path (or
+                    // losing the body and defaulting the method to GET) would
+                    // differ from the pasted command, so fail the import;
+                    // --data-raw is literal by definition and stays as text.
+                    if arg != "--data-raw" && value.starts_with('@') {
                         return Err(ApiError::invalid_request(
-                            "This cURL command uses --data-binary @file; binary request bodies are not supported yet",
+                            "This cURL command reads request data from a file; file-backed request bodies are not supported yet",
                         ));
                     }
                     data_parts.push(value.to_string());
@@ -326,13 +351,16 @@ pub fn parse_import(input: &str) -> Result<Value, ApiError> {
                     index += 1;
                     has_urlencode = true;
                     // Only curl's `name=content` form maps onto the row
-                    // editor, and the content is kept RAW: curl percent-encodes
-                    // it as-is at send time, so `q=a+b` must serialize to
-                    // `q=a%2Bb` (pre-decoding here would rewrite it to
-                    // `q=a%20b`, a space). The nameless (`content`,
-                    // `=content`) and file-backed (`@file`, `name@file`) forms
-                    // have no row representation; warn and skip rather than
-                    // silently reinterpreting them as body or query text.
+                    // editor. curl assumes the NAME is already URL-encoded
+                    // and sends it as-is, while the content is encoded as-is
+                    // at send time — so decode the name into the editor's
+                    // raw-key model (the send-time encoding reproduces the
+                    // original bytes exactly once) and keep the content RAW
+                    // (`q=a+b` must serialize to `q=a%2Bb`, not a pre-decoded
+                    // space). The nameless (`content`, `=content`) and
+                    // file-backed (`@file`, `name@file`) forms have no row
+                    // representation; warn and skip rather than silently
+                    // reinterpreting them as body or query text.
                     if let Some((name, content)) = value.split_once('=') {
                         if name.is_empty() {
                             ignored.push(
@@ -340,7 +368,7 @@ pub fn parse_import(input: &str) -> Result<Value, ApiError> {
                                     .to_string(),
                             );
                         } else {
-                            urlencode_rows.push((name.to_string(), content.to_string()));
+                            urlencode_rows.push((percent_decode(name), content.to_string()));
                         }
                     } else if value.contains('@') {
                         ignored.push(
@@ -428,7 +456,24 @@ pub fn parse_import(input: &str) -> Result<Value, ApiError> {
                 }
             }
             "-G" | "--get" => force_get = true,
-            flag if flag.len() > 1 && flag.starts_with('-') => ignored.push(flag.to_string()),
+            flag if flag.len() > 1 && flag.starts_with('-') => {
+                // A bundled short cluster (`-sS`) is ignorable only when
+                // every letter is a known value-less display flag.
+                let ignorable = if flag.starts_with("--") {
+                    LONG_IGNORABLE_FLAGS.contains(&flag)
+                } else {
+                    flag[1..]
+                        .chars()
+                        .all(|letter| SHORT_IGNORABLE_FLAGS.contains(&letter))
+                };
+                if ignorable {
+                    ignored.push(flag.to_string());
+                } else {
+                    return Err(ApiError::invalid_request(&format!(
+                        "unsupported cURL option \"{flag}\"; only a subset of curl options is imported",
+                    )));
+                }
+            }
             word => {
                 if url.is_none() {
                     url = Some(word.to_string());
@@ -844,16 +889,43 @@ mod tests {
     }
 
     #[test]
-    fn collects_unknown_flags_as_warnings_and_defaults_method() {
-        // -sS/-v/--weird-flag carry nothing the request model can represent,
-        // so they surface as warnings instead of failing the import.
-        let imported = import("curl -sS -v https://api.test/x --weird-flag");
+    fn display_flags_are_ignored_with_a_warning() {
+        // -sS/-v only affect curl's own output; they surface as warnings and
+        // never touch the request.
+        let imported = import("curl -sS -v https://api.test/x");
         assert_eq!(imported["request"]["method"], "GET");
         assert_eq!(imported["request"]["url"], "https://api.test/x");
         let warnings = imported["warnings"].as_array().unwrap();
-        for flag in ["-sS", "-v", "--weird-flag"] {
+        for flag in ["-sS", "-v"] {
             assert!(warnings.iter().any(|w| w == flag), "{warnings:?}");
         }
+    }
+
+    #[test]
+    fn unknown_options_block_the_import() {
+        // An unrecognized flag may consume the next token, so guessing would
+        // import a different request than the pasted command.
+        let error = parse_import("curl --weird-flag https://api.test/x")
+            .expect_err("unknown options must block the import");
+        assert!(error.message.contains("--weird-flag"), "{}", error.message);
+    }
+
+    #[test]
+    fn unknown_option_with_a_value_does_not_eat_the_url() {
+        let error = parse_import("curl --connect-timeout 5 https://api.test/x")
+            .expect_err("the option's value must not become the URL");
+        assert!(
+            error.message.contains("--connect-timeout"),
+            "{}",
+            error.message
+        );
+    }
+
+    #[test]
+    fn double_dash_ends_option_parsing() {
+        let imported = import("curl -sS -- https://api.test/x");
+        assert_eq!(imported["request"]["url"], "https://api.test/x");
+        assert_eq!(imported["request"]["method"], "GET");
     }
 
     #[test]
@@ -905,6 +977,21 @@ mod tests {
     }
 
     #[test]
+    fn data_urlencode_name_is_assumed_pre_encoded() {
+        // curl only URL-encodes the content; the NAME is sent as-is (already
+        // encoded). The name is decoded into the editor's raw-key model so
+        // the send-time encoding reproduces the original bytes exactly once
+        // instead of double-encoding the % escapes.
+        let imported = import(
+            "curl -G --data-urlencode 'filter%5Bname%5D=John Doe' https://x.test/s",
+        );
+        assert_eq!(
+            imported["request"]["url"],
+            "https://x.test/s?filter%5Bname%5D=John%20Doe"
+        );
+    }
+
+    #[test]
     fn data_urlencode_encodes_the_raw_content() {
         // curl percent-encodes the content as-is: `+` and `%` in the argument
         // are data, not escapes. Pre-decoding would rewrite `q=a+b` into
@@ -945,18 +1032,26 @@ mod tests {
     }
 
     #[test]
-    fn data_binary_at_file_blocks_the_import() {
-        // A file-backed binary body has no editor representation; failing the
-        // import beats a body-less draft that would send GET where the pasted
-        // command sends a request with a body.
-        let error = parse_import("curl --data-binary '@payload.bin' https://x.test/up")
-            .expect_err("@file binary body must block the import");
-        assert_eq!(error.category, "INVALID_REQUEST");
-        assert!(
-            error.message.contains("--data-binary @file"),
-            "{}",
-            error.message
-        );
+    fn file_backed_data_blocks_the_import() {
+        // -d/--data/--data-ascii/--data-binary all read `@file` and post the
+        // file's contents; only --data-raw is literal. The body model has no
+        // file representation, so the import fails rather than posting the
+        // literal path or losing the body entirely.
+        for command in [
+            "curl --data-binary '@payload.bin' https://x.test/up",
+            "curl -d @payload.txt https://x.test/up",
+            "curl --data @payload.txt https://x.test/up",
+            "curl --data-ascii @payload.txt https://x.test/up",
+        ] {
+            let error = parse_import(command)
+                .expect_err("file-backed bodies must block the import");
+            assert_eq!(error.category, "INVALID_REQUEST");
+            assert!(error.message.contains("file"), "{}", error.message);
+        }
+        // --data-raw is literal by definition.
+        let imported = import("curl --data-raw '@payload.txt' https://x.test/up");
+        assert_eq!(imported["request"]["body"]["type"], "text");
+        assert_eq!(imported["request"]["body"]["text"], "@payload.txt");
     }
 
     #[test]

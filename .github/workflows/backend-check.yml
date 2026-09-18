@@ -11,11 +11,21 @@ on:
       - "backend/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      # The backend job itself runs these; keep the gate honest when only
+      # they change.
+      - "tools/setup-sdk-patch.mjs"
+      - "tools/sidecar-smoke.mjs"
+      - "package.json"
+      - "package-lock.json"
   pull_request:
     paths:
       - "backend/**"
       - "Cargo.toml"
       - "Cargo.lock"
+      - "tools/setup-sdk-patch.mjs"
+      - "tools/sidecar-smoke.mjs"
+      - "package.json"
+      - "package-lock.json"
   workflow_dispatch:
 
 permissions:
