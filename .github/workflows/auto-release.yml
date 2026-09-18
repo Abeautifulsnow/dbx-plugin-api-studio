@@ -1,0 +1,97 @@
+name: Auto release from tag
+
+# Pushing a `v*` tag (or dispatching with one) runs the same gates as the
+# manual path, creates the GitHub Release with generated notes, and hands the
+# tag to the SDK's reusable packaging workflow — no manual release form.
+#
+# The web-created-release path (plugin-release.yml, `release: published`)
+# stays available for hand-written notes; a release created here via
+# GITHUB_TOKEN does NOT re-trigger that workflow (GitHub suppresses
+# token-caused events), so there is never a double build.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing v-tag to release (e.g. v0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    # A tag on a tree whose committed ui/index.html or wire fixtures are
+    # stale must not release — same gates as plugin-release.yml's verify-ui.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+
+      - name: Tag matches the declared plugin version
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          version="$(node -p 'JSON.parse(require("fs").readFileSync("manifest.json","utf8")).version')"
+          if [ "$tag" != "v$version" ]; then
+            echo "::error::tag $tag does not match the manifest version v$version — bump manifest.json and backend/Cargo.toml together, then re-tag"
+            exit 1
+          fi
+
+      - run: npm ci
+      - run: npm run build:ui
+      - run: git diff --exit-code ui/index.html
+      - run: npm run test:ui
+
+      - name: Wire the DBX Rust SDK (ships with the plugin CLI)
+        run: |
+          npm install --no-save --no-package-lock @dbx-app/plugin-cli@0.1.9
+          node tools/setup-sdk-patch.mjs
+
+      - run: cargo test --manifest-path backend/Cargo.toml
+      - run: git diff --exit-code backend/tests/fixtures/wire_specs.json
+
+  create-release:
+    needs: verify
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${{ inputs.tag || github.ref_name }}"
+          gh release create "$tag" \
+            --verify-tag \
+            --title "API Studio $tag" \
+            --generate-notes
+
+  package:
+    needs: create-release
+    uses: t8y2/dbx/.github/workflows/plugin-release-reusable.yml@plugin-sdk-v1
+    with:
+      release-tag: ${{ inputs.tag || github.ref_name }}
+      package-command: |
+        npm ci
+        npm run build:ui
+        dbx-plugin package .
+      package-path: dist/*.dbxp
+      metadata-path: dist/*.artifact.json
+      plugin-cli-version: 0.1.9

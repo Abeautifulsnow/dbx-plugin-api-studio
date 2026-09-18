@@ -32,7 +32,7 @@ The command builds the native backend for the current host, stages `manifest.jso
 
 ## Release
 
-1. Publish a GitHub Release. The generated workflow builds unsigned candidates for every target.
+1. Push a `v*` tag (or run the "Auto release from tag" workflow): `auto-release.yml` runs the verification gates, creates the GitHub Release with generated notes, and packages unsigned candidates for every target automatically. Publishing a Release by hand in the web UI triggers the same packaging (`plugin-release.yml`) if you prefer writing the notes yourself.
 2. If this repository is registered with `autoUpdate: true`, DBX Store automatically creates or updates a candidate PR. Otherwise, open one candidate PR against **`t8y2/dbx-store:main`** with the release and `release-candidates.json` URL; a submission Issue is not required.
 3. After review, DBX Store signs approved candidates with the official repository key and updates the same PR with the installable assets and signed metadata.
 

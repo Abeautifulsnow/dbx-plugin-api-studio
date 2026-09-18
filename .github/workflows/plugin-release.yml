@@ -3,6 +3,13 @@ name: Release DBX plugin
 on:
   release:
     types: [published]
+  # Re-run packaging against an existing release without recreating it.
+  workflow_dispatch:
+    inputs:
+      release-tag:
+        description: Existing GitHub Release tag that receives the plugin assets
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -44,7 +51,7 @@ jobs:
     needs: verify-ui
     uses: t8y2/dbx/.github/workflows/plugin-release-reusable.yml@plugin-sdk-v1
     with:
-      release-tag: ${{ github.event.release.tag_name }}
+      release-tag: ${{ github.event.release.tag_name || inputs.release-tag }}
       package-command: dbx-plugin package .
       package-path: dist/*.dbxp
       metadata-path: dist/*.artifact.json
