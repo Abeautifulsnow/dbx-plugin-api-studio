@@ -1,0 +1,40 @@
+name: Backend check
+
+# PR gate for backend-only changes. The UI workflow (ui-build-check.yml) runs
+# cargo test for wire-contract changes, but a push that only touches Rust code
+# would otherwise skip it; this job keeps `cargo test` + clippy on every
+# backend PR.
+
+on:
+  push:
+    paths:
+      - "backend/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  pull_request:
+    paths:
+      - "backend/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+
+      - name: Run backend tests (unit, protocol, wire contract)
+        run: cargo test --manifest-path backend/Cargo.toml
+
+      - name: Clippy
+        run: cargo clippy --manifest-path backend/Cargo.toml --all-targets -- -D warnings

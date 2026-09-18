@@ -304,7 +304,16 @@ pub fn parse_import(input: &str) -> Result<Value, ApiError> {
             "-d" | "--data" | "--data-raw" | "--data-ascii" | "--data-binary" => {
                 if let Some(value) = value() {
                     index += 1;
-                    data_parts.push(value.to_string());
+                    // --data-raw is literal by definition, but --data-binary
+                    // @file would read a (binary) file — the body model has no
+                    // binary body yet, so warn instead of silently importing
+                    // the literal path as text.
+                    if arg == "--data-binary" && value.starts_with('@') {
+                        ignored
+                            .push("--data-binary @file is not supported yet".to_string());
+                    } else {
+                        data_parts.push(value.to_string());
+                    }
                 }
             }
             "--data-urlencode" => {
@@ -469,9 +478,21 @@ pub fn parse_import(input: &str) -> Result<Value, ApiError> {
         if !data_parts.is_empty() {
             ignored.push("(--data combined with --form; data ignored)".to_string());
         }
-    } else if force_get && !data_parts.is_empty() {
-        let data = data_parts.join("&");
-        url = append_query(&url, &data);
+    } else if force_get {
+        // -G moves EVERY data option into the URL query — both `-d` and
+        // `--data-urlencode` (whose rows are re-encoded here) — and leaves no
+        // request body. An explicit -X still wins for the method string.
+        let mut pieces: Vec<String> = Vec::new();
+        if !data_parts.is_empty() {
+            pieces.push(data_parts.join("&"));
+        }
+        if !urlencode_rows.is_empty() {
+            pieces.push(serialize_urlencoded_pairs(&urlencode_rows));
+        }
+        let data = pieces.join("&");
+        if !data.is_empty() {
+            url = append_query(&url, &data);
+        }
     } else if !data_parts.is_empty() || has_urlencode {
         // Plain `-d` posts urlencoded by default; an explicit JSON content
         // type keeps the body JSON instead. Anything else stays as a plain
@@ -512,14 +533,11 @@ pub fn parse_import(input: &str) -> Result<Value, ApiError> {
     }
 
     // The Content-Type header was taken out of `headers` above; put it back
-    // unless a body model actually absorbed its semantics:
-    // - json / urlencoded bodies: the model owns the type (re-added at send).
-    // - multipart: the transport owns the boundary.
-    // - text bodies: "text" was only chosen because no model claimed the
-    //   declared type, so restore it — otherwise the request silently degrades
-    //   to the editor default (text/plain) instead of application/xml etc.
-    let content_type_consumed = matches!(body_kind, "json" | "urlencoded" | "multipart");
-    if !content_type_consumed {
+    // unless the body is multipart — the transport must own the multipart
+    // boundary. json/urlencoded/text keep the ORIGINAL header: the editor only
+    // adds a default when the header is absent, so custom types such as
+    // `application/vnd.api+json` survive the import untouched.
+    if body_kind != "multipart" {
         if let Some(original) = &content_type {
             headers.push(("Content-Type".to_string(), original.clone()));
         }
@@ -744,10 +762,12 @@ mod tests {
         assert_eq!(request["url"], "https://api.test/v1/orders");
         assert_eq!(request["auth"]["type"], "bearer");
         assert_eq!(request["auth"]["token"], "sk-abc");
-        // Authorization folded into the auth model, Content-Type folded into
-        // the body type.
+        // Authorization folds into the auth model; Content-Type survives — the
+        // json body keeps its original header instead of a rebuilt default.
         let headers = request["headers"].as_array().unwrap();
-        assert_eq!(headers.len(), 0, "{headers:?}");
+        assert_eq!(headers.len(), 1, "{headers:?}");
+        assert_eq!(headers[0]["key"], "Content-Type");
+        assert_eq!(headers[0]["value"], "application/json");
         assert_eq!(request["body"]["type"], "json");
         assert_eq!(request["body"]["text"], "{\"item\":1}");
     }
@@ -846,6 +866,81 @@ mod tests {
     }
 
     #[test]
+    fn get_moves_data_urlencode_into_the_query() {
+        // -G + --data-urlencode: the decoded row is re-encoded into the URL
+        // query and NO urlencoded body remains.
+        let imported = import("curl -G --data-urlencode 'q=hello world' https://api.test/search");
+        let request = &imported["request"];
+        assert_eq!(request["method"], "GET");
+        // %20 matches curl's own urlencoding of the query data.
+        assert_eq!(request["url"], "https://api.test/search?q=hello%20world");
+        assert_eq!(request["body"]["type"], "none");
+    }
+
+    #[test]
+    fn get_joins_onto_an_existing_query_and_keeps_the_fragment() {
+        let imported = import("curl -G 'https://x.test/?page=1#frag' -d 'a=1'");
+        assert_eq!(imported["request"]["url"], "https://x.test/?page=1&a=1#frag");
+    }
+
+    #[test]
+    fn get_with_an_explicit_method_keeps_that_method() {
+        // curl's -X still names the request line even with -G; the data still
+        // moves to the query.
+        let imported = import("curl -G -X POST 'https://x.test/ups' -d 'a=1'");
+        assert_eq!(imported["request"]["method"], "POST");
+        assert_eq!(imported["request"]["url"], "https://x.test/ups?a=1");
+        assert_eq!(imported["request"]["body"]["type"], "none");
+    }
+
+    #[test]
+    fn data_binary_at_file_becomes_a_warning_not_a_literal_body() {
+        let imported = import("curl --data-binary '@payload.bin' https://x.test/up");
+        let warnings = imported["warnings"].as_array().unwrap();
+        assert!(
+            warnings.iter().any(|w| {
+                w.as_str().is_some_and(|s| s.contains("--data-binary @file is not supported yet"))
+            }),
+            "{warnings:?}"
+        );
+        assert_ne!(imported["request"]["body"]["text"], "@payload.bin");
+    }
+
+    #[test]
+    fn import_preserves_a_custom_json_content_type() {
+        // json/urlencoded/text bodies keep the ORIGINAL content type header;
+        // the editor only adds a default when the header is absent, so
+        // vendor JSON types survive the import untouched.
+        let imported = import(
+            "curl https://api.test -H 'Content-Type: application/vnd.api+json' -d '{\"name\":\"A\"}'",
+        );
+        let request = &imported["request"];
+        assert_eq!(request["body"]["type"], "json");
+        let headers = request["headers"].as_array().unwrap();
+        assert!(
+            headers.iter().any(|header| header["key"] == "Content-Type"
+                && header["value"] == "application/vnd.api+json"),
+            "{headers:?}"
+        );
+    }
+
+    #[test]
+    fn import_still_strips_a_stale_content_type_for_multipart() {
+        let imported = import(
+            "curl https://x.test/up -H 'Content-Type: multipart/form-data; boundary=old' -F 'a=1'",
+        );
+        assert_eq!(imported["request"]["body"]["type"], "multipart");
+        let headers = imported["request"]["headers"].as_array().unwrap();
+        assert!(
+            !headers.iter().any(|header| header["key"]
+                .as_str()
+                .unwrap_or("")
+                .eq_ignore_ascii_case("content-type")),
+            "{headers:?}"
+        );
+    }
+
+    #[test]
     fn import_never_emits_a_raw_body_type() {
         // "raw" is a transport-side concept; the editor only knows
         // none/json/text/urlencoded/multipart.
@@ -872,14 +967,17 @@ mod tests {
     }
 
     #[test]
-    fn import_still_folds_a_consumed_json_content_type() {
+    fn import_preserves_the_original_json_content_type() {
+        // Plain application/json is kept as-is; the editor only supplies its
+        // default when the header is absent.
         let imported = import(
             "curl https://x.test -H 'Content-Type: application/json' -d '{\"a\":1}'",
         );
         assert_eq!(imported["request"]["body"]["type"], "json");
         let headers = imported["request"]["headers"].as_array().unwrap();
         assert!(
-            !headers.iter().any(|header| header["key"] == "Content-Type"),
+            headers.iter().any(|header| header["key"] == "Content-Type"
+                && header["value"] == "application/json"),
             "{headers:?}"
         );
     }
