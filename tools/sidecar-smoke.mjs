@@ -10,11 +10,16 @@ import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-const binary = process.argv[2];
-if (!binary) {
-  console.error("usage: node tools/sidecar-smoke.mjs <path-to-sidecar-binary>");
-  process.exit(2);
-}
+// Default to the cargo debug binary so `npm run test:smoke` works on any
+// platform right after `cargo build` / `cargo test`.
+const binary =
+  process.argv[2] ??
+  join(
+    "backend",
+    "target",
+    "debug",
+    `dbx-plugin-dbx-plugin-api-studio${process.platform === "win32" ? ".exe" : ""}`,
+  );
 
 const dataDir = mkdtempSync(join(tmpdir(), "api-studio-smoke-"));
 const child = spawn(binary, [], {
@@ -382,10 +387,16 @@ check(
     imported.result?.request?.body?.type === "json",
   JSON.stringify(imported.result ?? imported.error).slice(0, 240),
 );
+// Authorization folds into the auth model, but the JSON body's declared
+// Content-Type survives as a header (the editor only adds a default when the
+// header is absent).
+const importHeaders = imported.result?.request?.headers ?? [];
 check(
-  "import-curl folds Authorization out of headers",
-  Array.isArray(imported.result?.request?.headers) && imported.result.request.headers.length === 0,
-  JSON.stringify(imported.result?.request?.headers),
+  "import-curl folds Authorization but preserves Content-Type",
+  importHeaders.length === 1 &&
+    importHeaders[0]?.key === "Content-Type" &&
+    importHeaders[0]?.value === "application/json",
+  JSON.stringify(importHeaders),
 );
 
 const importBad = await call("api/import-curl", { curl: "curl -X POST -d x" });

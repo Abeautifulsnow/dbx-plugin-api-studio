@@ -18,6 +18,8 @@ dbx-plugin dev --path . --port 5190
 
 `npm run check:ui` type-checks the Svelte sources; `npm run test:ui` runs the UI test suites (the boot suite additionally needs Chrome, Edge or Chromium). The dev host reloads plugin frames whenever a UI build prints `DBX_UI_BUILD_SUCCESS`.
 
+Running `cargo test` outside the CLI needs the `dbx-plugin-sdk` crate, which is not published to crates.io — it ships inside the plugin CLI's npm package. Install the CLI (`npm install @dbx-app/plugin-cli`) and run `node tools/setup-sdk-patch.mjs` once; it writes a local, git-ignored `.cargo/config.toml` pointing cargo at the bundled SDK. `npm run test:smoke` drives the built sidecar binary over stdio-jsonl the way the host does.
+
 The CLI builds the backend and loads the declared UI. Optional `[dev]` `ui_build` and `ui_watch` command arrays configure frontend builds. Development credentials are stored as local plaintext in `.dbx-dev/`; keep that directory out of commits and packages. Use the real DBX host for final integration testing.
 
 Build an installable candidate:

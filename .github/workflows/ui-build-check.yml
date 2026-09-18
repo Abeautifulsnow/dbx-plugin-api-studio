@@ -73,6 +73,14 @@ jobs:
       # the real buildSendSpec; running cargo test right after — then diffing —
       # makes the UI → JSON → Rust wire contract a hard gate in one job. A
       # frontend contract change without regenerated fixtures fails here.
+      #
+      # dbx-plugin-sdk is not on crates.io; install the plugin CLI and point
+      # cargo at the bundled SDK first (same CLI the release packages with).
+      - name: Wire the DBX Rust SDK (ships with the plugin CLI)
+        run: |
+          npm install --no-save --no-package-lock @dbx-app/plugin-cli@0.1.9
+          node tools/setup-sdk-patch.mjs
+
       - name: Verify the Rust side of the wire contract
         run: cargo test --manifest-path backend/Cargo.toml
 

@@ -6,7 +6,8 @@
   "scripts": {
     "build:ui": "node tools/build-ui.mjs",
     "check:ui": "svelte-check --tsconfig ./tsconfig.json",
-    "test:ui": "node tools/ui-lib-test.mjs && node tools/ui-state-test.mjs && node tools/ui-redaction-test.mjs && node tools/ui-class-check.mjs && node tools/ui-boot-test.mjs"
+    "test:ui": "node tools/ui-lib-test.mjs && node tools/ui-state-test.mjs && node tools/ui-redaction-test.mjs && node tools/ui-class-check.mjs && node tools/ui-boot-test.mjs",
+    "test:smoke": "node tools/sidecar-smoke.mjs"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^6.2.1",

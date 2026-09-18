@@ -29,7 +29,15 @@ jobs:
       - run: npm run build:ui
       - run: git diff --exit-code ui/index.html
       - run: npm run test:ui
+      # dbx-plugin-sdk is not on crates.io; point cargo at the SDK bundled in
+      # the same CLI version the release job below packages with.
+      - run: |
+          npm install --no-save --no-package-lock @dbx-app/plugin-cli@0.1.9
+          node tools/setup-sdk-patch.mjs
       - run: cargo test --manifest-path backend/Cargo.toml
+      # cargo test produced the debug binary; run the stdio RPC smoke so a
+      # release cannot go out with a sidecar whose protocol behavior regressed.
+      - run: node tools/sidecar-smoke.mjs backend/target/debug/dbx-plugin-dbx-plugin-api-studio
       - run: git diff --exit-code backend/tests/fixtures/wire_specs.json
 
   release:

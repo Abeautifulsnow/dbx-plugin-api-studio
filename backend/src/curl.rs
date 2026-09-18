@@ -242,7 +242,10 @@ enum AuthKind {
 
 /// Recover an editor request from a pasted cURL command. Only the flags that
 /// map onto the v0.1 request model are interpreted; anything else is collected
-/// as a warning instead of failing the import.
+/// as a warning instead of failing the import. The one exception is a body the
+/// model cannot express at all (`--data-binary @file`): continuing would yield
+/// a request that differs from the pasted command in method AND body, so it
+/// fails the import outright.
 pub fn parse_import(input: &str) -> Result<Value, ApiError> {
     let words = tokenize(input);
     let mut args: &[String] = words.as_slice();
@@ -305,25 +308,49 @@ pub fn parse_import(input: &str) -> Result<Value, ApiError> {
                 if let Some(value) = value() {
                     index += 1;
                     // --data-raw is literal by definition, but --data-binary
-                    // @file would read a (binary) file — the body model has no
-                    // binary body yet, so warn instead of silently importing
-                    // the literal path as text.
+                    // @file reads a (binary) file the body model cannot
+                    // represent. Fail the import outright: continuing would
+                    // yield a body-less draft whose method defaults to GET —
+                    // a request that differs from the pasted command in both
+                    // method and body.
                     if arg == "--data-binary" && value.starts_with('@') {
-                        ignored
-                            .push("--data-binary @file is not supported yet".to_string());
-                    } else {
-                        data_parts.push(value.to_string());
+                        return Err(ApiError::invalid_request(
+                            "This cURL command uses --data-binary @file; binary request bodies are not supported yet",
+                        ));
                     }
+                    data_parts.push(value.to_string());
                 }
             }
             "--data-urlencode" => {
                 if let Some(value) = value() {
                     index += 1;
                     has_urlencode = true;
-                    if let Some((name, encoded)) = value.split_once('=') {
-                        urlencode_rows.push((name.to_string(), percent_decode(encoded)));
+                    // Only curl's `name=content` form maps onto the row
+                    // editor, and the content is kept RAW: curl percent-encodes
+                    // it as-is at send time, so `q=a+b` must serialize to
+                    // `q=a%2Bb` (pre-decoding here would rewrite it to
+                    // `q=a%20b`, a space). The nameless (`content`,
+                    // `=content`) and file-backed (`@file`, `name@file`) forms
+                    // have no row representation; warn and skip rather than
+                    // silently reinterpreting them as body or query text.
+                    if let Some((name, content)) = value.split_once('=') {
+                        if name.is_empty() {
+                            ignored.push(
+                                "unsupported --data-urlencode form '=content'; piece skipped"
+                                    .to_string(),
+                            );
+                        } else {
+                            urlencode_rows.push((name.to_string(), content.to_string()));
+                        }
+                    } else if value.contains('@') {
+                        ignored.push(
+                            "unsupported --data-urlencode form '@file'; piece skipped".to_string(),
+                        );
                     } else {
-                        data_parts.push(value.to_string());
+                        ignored.push(
+                            "unsupported --data-urlencode form 'content' (nameless); piece skipped"
+                                .to_string(),
+                        );
                     }
                 }
             }
@@ -878,6 +905,30 @@ mod tests {
     }
 
     #[test]
+    fn data_urlencode_encodes_the_raw_content() {
+        // curl percent-encodes the content as-is: `+` and `%` in the argument
+        // are data, not escapes. Pre-decoding would rewrite `q=a+b` into
+        // `q=a%20b` (space) instead of `q=a%2Bb` (literal plus).
+        let imported = import("curl -G --data-urlencode 'q=a+b' https://x.test/s");
+        assert_eq!(imported["request"]["url"], "https://x.test/s?q=a%2Bb");
+    }
+
+    #[test]
+    fn unsupported_data_urlencode_forms_warn_and_are_skipped() {
+        // Nameless (`hello world`, `=x`) and file-backed (`@f`, `q@f`) forms
+        // have no row representation; they must warn rather than land
+        // silently in the body or query as raw text.
+        let imported = import(
+            "curl -G --data-urlencode 'hello world' --data-urlencode '=x' \
+             --data-urlencode '@f.bin' --data-urlencode 'q@f.bin' https://x.test/s",
+        );
+        let warnings = imported["warnings"].as_array().unwrap();
+        assert_eq!(warnings.len(), 4, "{warnings:?}");
+        assert_eq!(imported["request"]["url"], "https://x.test/s");
+        assert_eq!(imported["request"]["body"]["type"], "none");
+    }
+
+    #[test]
     fn get_joins_onto_an_existing_query_and_keeps_the_fragment() {
         let imported = import("curl -G 'https://x.test/?page=1#frag' -d 'a=1'");
         assert_eq!(imported["request"]["url"], "https://x.test/?page=1&a=1#frag");
@@ -894,16 +945,18 @@ mod tests {
     }
 
     #[test]
-    fn data_binary_at_file_becomes_a_warning_not_a_literal_body() {
-        let imported = import("curl --data-binary '@payload.bin' https://x.test/up");
-        let warnings = imported["warnings"].as_array().unwrap();
+    fn data_binary_at_file_blocks_the_import() {
+        // A file-backed binary body has no editor representation; failing the
+        // import beats a body-less draft that would send GET where the pasted
+        // command sends a request with a body.
+        let error = parse_import("curl --data-binary '@payload.bin' https://x.test/up")
+            .expect_err("@file binary body must block the import");
+        assert_eq!(error.category, "INVALID_REQUEST");
         assert!(
-            warnings.iter().any(|w| {
-                w.as_str().is_some_and(|s| s.contains("--data-binary @file is not supported yet"))
-            }),
-            "{warnings:?}"
+            error.message.contains("--data-binary @file"),
+            "{}",
+            error.message
         );
-        assert_ne!(imported["request"]["body"]["text"], "@payload.bin");
     }
 
     #[test]
