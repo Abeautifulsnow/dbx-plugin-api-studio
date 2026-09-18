@@ -207,6 +207,8 @@ export const DICTIONARIES = {
     sizeHeader: "Size",
     timeHeader: "Time",
     loadFailed: "Saved requests and history could not be loaded.",
+    corruptState:
+      "Saved requests could not be read. The damaged file was preserved as a backup and a new workspace was started.",
     dismiss: "Dismiss",
   },
   zh: {
@@ -409,6 +411,7 @@ export const DICTIONARIES = {
     sizeHeader: "大小",
     timeHeader: "时间",
     loadFailed: "无法读取已保存的请求与历史记录。",
+    corruptState: "本地保存的请求数据无法读取。损坏文件已保留为备份，工作区已重新初始化。",
     dismiss: "关闭",
   },
 };

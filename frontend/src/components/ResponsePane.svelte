@@ -52,6 +52,18 @@
   // Binary bodies are enforced at a smaller limit than text; the sidecar
   // reports which one actually applied.
   const previewLimit = $derived(response?.previewLimitBytes ?? truncatedLimit);
+  // `sizeBytes` is the preview that was delivered. When the server reported a
+  // total and it differs from the preview, show both so a truncated response is
+  // never mistaken for the whole body.
+  const sizeLabel = $derived.by(() => {
+    if (!response) return "—";
+    const preview = formatBytes(response.body.sizeBytes);
+    const total = response.contentLength;
+    if (response.body.truncated && total != null && total !== response.body.sizeBytes) {
+      return `${preview} / ${formatBytes(total)}`;
+    }
+    return preview;
+  });
   const parsed = $derived(
     response && response.body.text && !binary ? parseJson(response.body.text) : { ok: false },
   );
@@ -134,7 +146,7 @@
         <span class="status-dot status-dot--{statusKind}" aria-hidden="true"></span>
         <span class="response__status">{response.status} {response.statusText}</span>
         <span class="response__dim">{formatMs(response.timing.totalMs)}</span>
-        <span class="response__dim">{formatBytes(response.body.sizeBytes)}</span>
+        <span class="response__dim">{sizeLabel}</span>
         {#if receivedAt}<span class="response__dim">{formatTime(receivedAt)}</span>{/if}
       </div>
     {/if}
@@ -329,7 +341,7 @@
           <dt>{t("infoStatus")}</dt>
           <dd class="mono">{response.status} {response.statusText}</dd>
           <dt>{t("infoSize")}</dt>
-          <dd class="mono">{formatBytes(response.body.sizeBytes)}</dd>
+          <dd class="mono">{sizeLabel}</dd>
           {#if response.contentType}
             <dt>{t("infoType")}</dt>
             <dd class="mono">{response.contentType}</dd>

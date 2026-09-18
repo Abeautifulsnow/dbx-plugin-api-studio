@@ -188,9 +188,14 @@ check(
   (appSource.match(/api\.appendHistory\(/g) || []).length === 1,
 );
 check(
-  "the history snapshot is built through redactRequestForHistory",
-  /historyEntry\(\{[\s\S]*?request:\s*(snapshot|redactRequestForHistory)/.test(appSource) &&
-    appSource.includes("redactRequestForHistory(current.request)"),
+  "the history snapshot is built from the frozen send snapshot through redactRequestForHistory",
+  appSource.includes("const requestSnapshot = deepClone(current.request)") &&
+    appSource.includes("recordHistory({ requestKey, request: requestSnapshot") &&
+    appSource.includes("redactRequestForHistory(request)"),
+);
+check(
+  "history never reads the live editor state at completion time",
+  !appSource.includes("redactRequestForHistory(current.request)"),
 );
 check(
   "persistence sends persistableState()",

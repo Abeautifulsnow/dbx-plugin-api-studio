@@ -355,6 +355,10 @@ export function normalizeResponse(payload) {
     // The preview limit the sidecar actually enforced: the configured cap for
     // text, the smaller binary cap for base64 bodies.
     previewLimitBytes: payload.previewLimitBytes ?? null,
+    // Total body size per Content-Length, when the server reported one — this
+    // is what the meta line shows next to the preview size on truncated
+    // responses, so a preview is never mistaken for the whole body.
+    contentLength: payload.contentLength ?? null,
     timing: {
       totalMs: payload.timing?.totalMs ?? null,
       ttfbMs: payload.timing?.ttfbMs ?? null,

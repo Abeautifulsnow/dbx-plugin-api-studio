@@ -45,7 +45,9 @@ export function resolveString(text, scope, maskSecrets) {
   return { value, unresolved };
 }
 
-/** Total variable scope: request-local definitions win over the environment. */
+/** Total variable scope: request-local definitions win over the environment.
+ * A request-local variable keeps its own secret flag — it is masked in cURL
+ * exports exactly like an environment secret. */
 export function variableScope(environment, request) {
   const scope = new Map();
   for (const variable of environment?.variables || []) {
@@ -56,7 +58,11 @@ export function variableScope(environment, request) {
     });
   }
   for (const variable of request?.variables || []) {
-    scope.set(variable.key, { value: variable.value, secret: false, source: "request" });
+    scope.set(variable.key, {
+      value: variable.value,
+      secret: !!variable.secret,
+      source: "request",
+    });
   }
   return scope;
 }
@@ -71,10 +77,13 @@ export function isHttpUrl(text) {
 }
 
 export function appendQueryParam(urlText, key, value) {
-  const separator = urlText.includes("?") ? "&" : "?";
+  // Decide the separator from the query-less base: a fragment can legally
+  // contain "?", which must not make an existing-query URL out of one that has
+  // only a fragment (that would yield `users&api_key=x#…`).
   const hashIndex = urlText.indexOf("#");
   const base = hashIndex >= 0 ? urlText.slice(0, hashIndex) : urlText;
   const hash = hashIndex >= 0 ? urlText.slice(hashIndex) : "";
+  const separator = base.includes("?") ? "&" : "?";
   return base + separator + encodeURIComponent(key) + "=" + encodeURIComponent(value) + hash;
 }
 

@@ -25,6 +25,48 @@ pub const MAX_BINARY_PREVIEW_BYTES: usize = 4 * 1024 * 1024;
 
 pub const METHODS: [&str; 5] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
 
+/// The JSON-RPC transport rejects any single message over 8 MiB. serde_json can
+/// expand control characters up to 6x while escaping, so the byte-based body
+/// cap cannot bound the serialized message by itself: after building a response
+/// the payload is measured and the text preview shrunk until it provably fits,
+/// with headroom for envelope growth.
+pub const TRANSPORT_MESSAGE_BUDGET: usize = 7 * 1024 * 1024;
+
+/// Measure the serialized payload and shrink `body.text` until it fits the
+/// transport. `body.sizeBytes` follows the delivered preview and `truncated`
+/// is set, so the UI always quotes a size the user actually received.
+pub fn fit_payload_to_transport(payload: &mut Value) {
+    for _ in 0..8 {
+        let Ok(serialized) = serde_json::to_vec(payload) else {
+            return;
+        };
+        if serialized.len() <= TRANSPORT_MESSAGE_BUDGET {
+            return;
+        }
+        let Some(body) = payload.get_mut("body").and_then(Value::as_object_mut) else {
+            return;
+        };
+        let Some(text) = body.get("text").and_then(Value::as_str) else {
+            return;
+        };
+        // Cut proportionally to the overshoot (with a safety factor) so two or
+        // three iterations converge; never split a UTF-8 character.
+        let overshoot = serialized.len() as f64 / TRANSPORT_MESSAGE_BUDGET as f64;
+        let mut keep = (text.len() as f64 / (overshoot * 1.25)) as usize;
+        while keep > 0 && !text.is_char_boundary(keep) {
+            keep -= 1;
+        }
+        body.insert("text".to_string(), Value::String(text[..keep].to_string()));
+        body.insert("sizeBytes".to_string(), Value::from(keep as u64));
+        body.insert("truncated".to_string(), Value::Bool(true));
+    }
+    // Still over after repeated proportional cuts: drop the preview entirely —
+    // a response without a body beats a response the transport rejects.
+    if let Some(body) = payload.get_mut("body").and_then(Value::as_object_mut) {
+        body.insert("text".to_string(), Value::String(String::new()));
+    }
+}
+
 /// Stable error taxonomy (PRD §6.2 plus the RPC-params category). Both the UI
 /// and the sidecar must classify every failure into one of these names so the
 /// workbench can render a predictable cause + next step.
@@ -162,6 +204,10 @@ pub struct ResponsePayload {
     /// this in the truncation notice so it never quotes a limit that was not
     /// the one enforced.
     pub body_preview_limit: u64,
+    /// The response's total size as reported by `Content-Length`, when the
+    /// server sent one. lets the UI distinguish "this is the whole response"
+    /// from "this is a preview of a larger body".
+    pub content_length: Option<u64>,
     pub final_url: String,
     pub redirect_count: u32,
     pub total_ms: u64,
@@ -1101,5 +1147,51 @@ mod tests {
         assert_eq!(canonical_reason(200), "OK");
         assert_eq!(canonical_reason(404), "Not Found");
         assert_eq!(canonical_reason(599), "Unknown");
+    }
+
+    #[test]
+    fn response_payload_is_shrunk_to_fit_the_transport() {
+        // 4 MiB of control characters escape at 6 bytes each: ~24 MiB of JSON
+        // from a body that is under the 6 MiB byte cap. The fitter must shrink
+        // the preview until the serialized payload provably fits the 8 MiB
+        // transport with headroom.
+        let mut payload = serde_json::json!({
+            "requestId": "call_1",
+            "status": 200,
+            "headers": [{ "name": "x", "value": "y" }],
+            "body": {
+                "text": "\u{1}".repeat(4 * 1024 * 1024),
+                "truncated": false,
+                "sizeBytes": 4 * 1024 * 1024,
+            },
+            "previewLimitBytes": 6 * 1024 * 1024,
+            "timing": { "totalMs": 5 },
+        });
+        fit_payload_to_transport(&mut payload);
+        let serialized = serde_json::to_vec(&payload).unwrap();
+        assert!(
+            serialized.len() <= TRANSPORT_MESSAGE_BUDGET,
+            "serialized payload is {} bytes, budget {}",
+            serialized.len(),
+            TRANSPORT_MESSAGE_BUDGET
+        );
+        let body = payload["body"].as_object().unwrap();
+        assert_eq!(body["truncated"], serde_json::Value::Bool(true));
+        // sizeBytes follows the delivered preview, so the truncation notice
+        // never quotes bytes the user did not receive.
+        assert_eq!(body["sizeBytes"], body["text"].as_str().unwrap().len());
+        assert!(body["text"].as_str().unwrap().len() < 4 * 1024 * 1024);
+    }
+
+    #[test]
+    fn response_payload_that_fits_is_untouched() {
+        let mut payload = serde_json::json!({
+            "body": { "text": "hello", "sizeBytes": 5, "truncated": false },
+            "previewLimitBytes": 1024,
+        });
+        fit_payload_to_transport(&mut payload);
+        assert_eq!(payload["body"]["text"], "hello");
+        assert_eq!(payload["body"]["sizeBytes"], 5);
+        assert_eq!(payload["body"]["truncated"], serde_json::Value::Bool(false));
     }
 }

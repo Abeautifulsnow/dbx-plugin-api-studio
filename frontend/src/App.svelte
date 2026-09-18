@@ -22,6 +22,7 @@
     normalizeResponse,
     persistableState,
     removeItem,
+    walkTree,
   } from "./lib/model.js";
   import { redactRequestForHistory } from "./lib/redaction.js";
   import { filterCollections } from "./lib/search.js";
@@ -70,8 +71,15 @@
 
   let responses = $state({});
   let receivedAt = $state({});
-  let sending = $state("");
-  let outcome = $state(null);
+  // In-flight state is tracked per request: `sendingId` holds the sidecar
+  // request id (one request in flight at a time) and `sendingFor` the editor
+  // request it belongs to, so switching requests mid-flight never shows another
+  // request's spinner or dims its pane.
+  let sendingId = $state("");
+  let sendingFor = $state("");
+  // Outcome (ok/cancelled/error) is per request, mirroring `responses`: an
+  // in-flight failure for request A must render on A's pane, never on B's.
+  let outcomes = $state({});
   let sendIssues = $state({});
 
   let activeTab = $state("params");
@@ -98,6 +106,9 @@
   );
   const visibleCollections = $derived(filterCollections(collections, search));
   const response = $derived(responses[current.id] ?? null);
+  const sending = $derived(!!sendingId);
+  const sendingForCurrent = $derived(sendingFor !== "" && sendingFor === current.id);
+  const outcome = $derived(outcomes[current.id] ?? null);
   const error = $derived(
     outcome?.kind === "error" ? { category: outcome.category, message: outcome.message } : null,
   );
@@ -186,7 +197,6 @@
         collectionId: collection?.id ?? null,
       };
       sendIssues = {};
-      outcome = null;
     });
   }
 
@@ -203,7 +213,6 @@
       };
       activeTab = "params";
       sendIssues = {};
-      outcome = null;
     });
   }
 
@@ -219,7 +228,6 @@
       };
       historyActiveId = entry.id;
       sendIssues = {};
-      outcome = null;
       announcePolite(
         hadBody
           ? `${t("restoredFromHistory")} ${t("bodyNotRestored")}`
@@ -500,55 +508,76 @@
     }
 
     sendIssues = {};
-    outcome = null;
-    sending = requestId;
-    const token = ++sendSequence;
     const requestKey = current.id;
+    // Freeze what "Send" meant. The history entry and the pane must reflect the
+    // request that was actually sent, not whatever the editor holds when the
+    // response arrives — the user may edit fields or switch requests while the
+    // request is in flight.
+    const requestSnapshot = deepClone(current.request);
+    sendingId = requestId;
+    sendingFor = requestKey;
+    const token = ++sendSequence;
+    let settledResponse = null;
+    let settledOutcome = null;
 
     api
       .sendRequest(spec)
       .then((result) => {
-        // A newer send owns the pane now; dropping a superseded result keeps a
-        // slow response from overwriting a fresh one.
-        if (token !== sendSequence) return;
         if (result?.cancelled) {
-          outcome = { kind: "cancelled" };
-          announcePolite(t("announceCancelled"));
+          settledOutcome = { kind: "cancelled" };
         } else {
           const normalized = normalizeResponse(result);
-          responses = { ...responses, [requestKey]: normalized };
-          receivedAt = { ...receivedAt, [requestKey]: Date.now() };
-          outcome = { kind: "ok" };
-          announcePolite(t("announceSent", { status: normalized.status }));
+          settledResponse = normalized;
+          settledOutcome = { kind: "ok" };
         }
+        // A newer send owns the pane now; dropping a superseded result keeps a
+        // slow response from overwriting a fresh one. The request still
+        // happened, so history records it regardless (from the closure state,
+        // never from what the editor holds by then).
+        if (token !== sendSequence) return;
+        outcomes = { ...outcomes, [requestKey]: settledOutcome };
+        if (settledResponse) {
+          responses = { ...responses, [requestKey]: settledResponse };
+          receivedAt = { ...receivedAt, [requestKey]: Date.now() };
+        }
+        if (settledOutcome.kind === "cancelled") announcePolite(t("announceCancelled"));
+        else if (settledOutcome.kind === "ok")
+          announcePolite(t("announceSent", { status: settledResponse.status }));
       })
       .catch((failure) => {
-        if (token !== sendSequence) return;
         const category = failure?.category || "INTERNAL_ERROR";
-        outcome = { kind: "error", category, message: failure?.message ?? String(failure) };
+        settledOutcome = { kind: "error", category, message: failure?.message ?? String(failure) };
+        if (token !== sendSequence) return;
+        outcomes = { ...outcomes, [requestKey]: settledOutcome };
         announceAssertive(t("announceFailed", { category }));
       })
       .finally(() => {
-        if (token === sendSequence) sending = "";
-        recordHistory(requestKey);
+        if (token === sendSequence) {
+          sendingId = "";
+          sendingFor = "";
+        }
+        recordHistory({ requestKey, request: requestSnapshot, outcome: settledOutcome, response: settledResponse });
       });
   }
 
   async function cancel() {
     if (!sending) return;
     try {
-      await api.cancelRequest(sending);
+      await api.cancelRequest(sendingId);
     } catch (failure) {
       toast(failure?.message ?? String(failure));
     }
   }
 
-  /** History keeps a redacted snapshot: no body text and no credentials. */
-  function recordHistory(requestKey) {
-    const snapshot = redactRequestForHistory(current.request);
+  /**
+   * History keeps a redacted snapshot of the request as it was sent: no body
+   * text and no credentials. The request, response and outcome all come from
+   * the send's own closure — never from the live editor state.
+   */
+  function recordHistory({ request, outcome, response }) {
     const entry = historyEntry({
-      request: snapshot,
-      response: responses[requestKey] ?? null,
+      request: redactRequestForHistory(request),
+      response,
       error: outcome?.kind === "error" ? { category: outcome.category } : null,
     });
     history = [entry, ...history].slice(0, 500);
@@ -753,6 +782,12 @@
       settings = migrated.settings;
       history = migrateHistory(stored.history);
       loaded = true;
+      if (stored.corrupted?.length) {
+        // The sidecar preserved each damaged file next to the original; say so
+        // instead of silently starting from an empty workspace.
+        loadError = t("corruptState");
+        announceAssertive(loadError);
+      }
     } catch (failure) {
       // Never strand the workbench on the loading screen. Fall back to an empty
       // workspace and leave persistence off so nothing overwrites stored data.
@@ -760,7 +795,14 @@
     }
 
     openInitialRequest();
-    expanded = new Set(collections.map((collection) => collection.id));
+    // Start with every container expanded so the whole tree is visible; users
+    // can collapse sections from there (a collapsed folder hiding the open
+    // request's row is confusing).
+    const expandedIds = new Set();
+    walkTree(collections, (item) => {
+      if (item.items) expandedIds.add(item.id);
+    });
+    expanded = expandedIds;
     ready = true;
   });
 
@@ -882,7 +924,7 @@
 
       <ResponsePane
         {response}
-        sending={!!sending}
+        sending={sendingForCurrent}
         {error}
         {cancelled}
         receivedAt={receivedAt[current.id] ?? null}

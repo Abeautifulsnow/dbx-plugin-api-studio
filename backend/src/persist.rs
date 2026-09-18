@@ -34,18 +34,27 @@ pub trait PersistenceAdapter: Send + Sync {
     /// Returns the number of evicted (oldest) entries.
     fn append_history(&self, entry: Value) -> io::Result<usize>;
     fn clear_history(&self) -> io::Result<()>;
+    /// Backup paths of files quarantined as corrupt during recent loads, then
+    /// drained. Surfaced through `api/persistence/load` so the UI can tell the
+    /// user their data was damaged instead of silently re-seeding.
+    fn take_corrupted(&self) -> Vec<String>;
 }
 
 pub struct FilePersistence {
     dir: PathBuf,
     guard: Mutex<()>,
+    corrupted: Mutex<Vec<String>>,
 }
 
 impl FilePersistence {
     pub fn new() -> io::Result<Self> {
         let dir = storage_dir()?;
         fs::create_dir_all(&dir)?;
-        Ok(Self { dir, guard: Mutex::new(()) })
+        Ok(Self {
+            dir,
+            guard: Mutex::new(()),
+            corrupted: Mutex::new(Vec::new()),
+        })
     }
 
     fn state_path(&self) -> PathBuf {
@@ -54,6 +63,56 @@ impl FilePersistence {
 
     fn history_path(&self) -> PathBuf {
         self.dir.join(HISTORY_FILE)
+    }
+
+    /// A malformed file is never silently treated as missing data: the original
+    /// is preserved under a `.corrupt-<timestamp>` sibling so the user keeps a
+    /// recovery path, the fact is surfaced through `api/persistence/load`, and
+    /// only then does the caller see "no data".
+    fn quarantine_corrupt(&self, path: &PathBuf) {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
+        let mut backup = path.clone().into_os_string();
+        backup.push(format!(".corrupt-{stamp}"));
+        match fs::rename(path, &backup) {
+            Ok(()) => {
+                eprintln!(
+                    "api-studio: corrupt {} preserved as {}",
+                    path.display(),
+                    backup.display()
+                );
+                if let Ok(mut notes) = self.corrupted.lock() {
+                    notes.push(backup.display().to_string());
+                }
+            }
+            Err(_) => {
+                // Best effort only: keep the damaged file in place rather than
+                // lose it; the next load will try again.
+            }
+        }
+    }
+
+    fn read_json_file(&self, path: &PathBuf) -> io::Result<Option<Value>> {
+        match fs::read(path) {
+            Ok(bytes) => match serde_json::from_slice(&bytes) {
+                Ok(value) => Ok(Some(value)),
+                Err(_) => {
+                    self.quarantine_corrupt(path);
+                    Ok(None)
+                }
+            },
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    fn read_history_file(&self, path: &PathBuf) -> io::Result<Vec<Value>> {
+        Ok(self
+            .read_json_file(path)?
+            .and_then(|v| v.as_array().cloned())
+            .unwrap_or_default())
     }
 }
 
@@ -102,31 +161,10 @@ fn is_transient_lock(err: &io::Error) -> bool {
         || err.kind() == io::ErrorKind::PermissionDenied
 }
 
-fn read_json_file(path: &PathBuf) -> io::Result<Option<Value>> {
-    match fs::read(path) {
-        Ok(bytes) => {
-            // A corrupt or partially written file must never brick startup;
-            // treat it as missing so the UI re-seeds and the next save repairs.
-            match serde_json::from_slice(&bytes) {
-                Ok(value) => Ok(Some(value)),
-                Err(_) => Ok(None),
-            }
-        }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e),
-    }
-}
-
-fn read_history_file(path: &PathBuf) -> io::Result<Vec<Value>> {
-    Ok(read_json_file(path)?
-        .and_then(|v| v.as_array().cloned())
-        .unwrap_or_default())
-}
-
 impl PersistenceAdapter for FilePersistence {
     fn load_state(&self) -> io::Result<Option<Value>> {
         let _guard = self.guard.lock().expect("persistence lock poisoned");
-        read_json_file(&self.state_path())
+        self.read_json_file(&self.state_path())
     }
 
     fn save_state(&self, state: &Value) -> io::Result<()> {
@@ -144,7 +182,7 @@ impl PersistenceAdapter for FilePersistence {
 
     fn load_history(&self) -> io::Result<Vec<Value>> {
         let _guard = self.guard.lock().expect("persistence lock poisoned");
-        read_history_file(&self.history_path())
+        self.read_history_file(&self.history_path())
     }
 
     fn append_history(&self, mut entry: Value) -> io::Result<usize> {
@@ -161,7 +199,7 @@ impl PersistenceAdapter for FilePersistence {
         redact_history_entry(&mut entry);
 
         let _guard = self.guard.lock().expect("persistence lock poisoned");
-        let mut history = read_history_file(&self.history_path())?;
+        let mut history = self.read_history_file(&self.history_path())?;
         history.push(entry);
         let evicted = history.len().saturating_sub(HISTORY_LIMIT);
         if evicted > 0 {
@@ -176,6 +214,13 @@ impl PersistenceAdapter for FilePersistence {
     fn clear_history(&self) -> io::Result<()> {
         let _guard = self.guard.lock().expect("persistence lock poisoned");
         write_atomic(&self.history_path(), "[]")
+    }
+
+    fn take_corrupted(&self) -> Vec<String> {
+        self.corrupted
+            .lock()
+            .map(|mut notes| std::mem::take(&mut *notes))
+            .unwrap_or_default()
     }
 }
 
@@ -202,6 +247,7 @@ mod tests {
         FilePersistence {
             dir,
             guard: Mutex::new(()),
+            corrupted: Mutex::new(Vec::new()),
         }
     }
 
@@ -223,6 +269,31 @@ mod tests {
         let store = persistence("corrupt");
         fs::write(store.dir.join(STATE_FILE), "{ not json").unwrap();
         assert_eq!(store.load_state().unwrap(), None);
+    }
+
+    #[test]
+    fn corrupt_state_is_quarantined_with_a_recovery_copy() {
+        // User data must never be silently discarded: the damaged file is kept
+        // under a .corrupt-* sibling, the fact is reported through
+        // take_corrupted (→ api/persistence/load → UI), and only then does the
+        // store behave as if the data were missing.
+        let store = persistence("quarantine");
+        fs::write(store.dir.join(STATE_FILE), "{ not json").unwrap();
+        assert_eq!(store.load_state().unwrap(), None);
+        let preserved: Vec<String> = fs::read_dir(&store.dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".corrupt-"))
+            .collect();
+        assert_eq!(preserved.len(), 1, "the damaged file must be preserved");
+        assert!(preserved[0].starts_with("state.json.corrupt-"));
+        assert_eq!(store.take_corrupted().len(), 1);
+        assert_eq!(store.take_corrupted().len(), 0, "notes drain on read");
+        // The preserved copy still holds the original bytes for recovery.
+        assert_eq!(
+            fs::read_to_string(store.dir.join(&preserved[0])).unwrap(),
+            "{ not json"
+        );
     }
 
     #[test]

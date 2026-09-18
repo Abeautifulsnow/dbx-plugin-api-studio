@@ -296,5 +296,31 @@ check("truncated responses cannot", canSetAsVariable("v", true) === false);
 check("oversized values cannot", canSetAsVariable("x".repeat(70 * 1024), false) === false);
 check("objects are stringified for the clipboard", valueAsText({ a: 1 }) === '{"a":1}' && valueAsText("s") === "s");
 
+/* --------------------------------------------- request-local secrets & URLs */
+
+const requestLocalScope = variableScope(
+  { variables: [] },
+  { variables: [{ id: "9", key: "req_secret", value: "LOCAL-SECRET", secret: true }] },
+);
+check(
+  "request-local secret values are masked in cURL exports",
+  resolveString("{{req_secret}}", requestLocalScope, true).value === "{{req_secret}}",
+);
+check(
+  "request-local secret values still resolve on send",
+  resolveString("{{req_secret}}", requestLocalScope).value === "LOCAL-SECRET",
+);
+
+check(
+  "appendQueryParam ignores a ? inside the fragment",
+  appendQueryParam("https://api.test/users#docs?section=auth", "api_key", "x") ===
+    "https://api.test/users?api_key=x#docs?section=auth",
+);
+check(
+  "appendQueryParam still joins onto an existing query",
+  appendQueryParam("https://api.test/users?page=2", "api_key", "x") ===
+    "https://api.test/users?page=2&api_key=x",
+);
+
 console.log(failures ? `LIBRARY CHECKS FAILED (${failures})` : "ALL LIBRARY CHECKS PASSED");
 process.exit(failures ? 1 : 0);

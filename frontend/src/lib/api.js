@@ -32,10 +32,15 @@ async function invoke(method, params, options) {
   }
 }
 
-/** Load persisted collections, environments, settings and history. */
+/** Load persisted collections, environments, settings, history and the list of
+ * files that had to be quarantined as corrupt. */
 export async function loadPersistedState() {
   const result = await invoke("api/persistence/load", {});
-  return { state: result?.state ?? null, history: result?.history ?? [] };
+  return {
+    state: result?.state ?? null,
+    history: result?.history ?? [],
+    corrupted: result?.corrupted ?? [],
+  };
 }
 
 export async function saveState(state) {

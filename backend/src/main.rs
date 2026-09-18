@@ -61,7 +61,11 @@ impl PluginHandler for Plugin {
                 let validated = model::validate_spec(spec).map_err(api_error)?;
                 let cancel = self.registry.register(&validated.request_id);
                 match exec::execute(validated, &self.registry, cancel) {
-                    ExecOutcome::Response(payload) => Ok(response_json(payload)),
+                    ExecOutcome::Response(payload) => {
+                        let mut payload = response_json(payload);
+                        model::fit_payload_to_transport(&mut payload);
+                        Ok(payload)
+                    }
                     ExecOutcome::Cancelled { request_id } => Ok(json!({
                         "requestId": request_id,
                         "cancelled": true,
@@ -89,7 +93,8 @@ impl PluginHandler for Plugin {
                 let storage = self.storage()?;
                 let state = storage.load_state().map_err(io_error)?;
                 let history = storage.load_history().map_err(io_error)?;
-                Ok(json!({ "state": state, "history": history }))
+                let corrupted = storage.take_corrupted();
+                Ok(json!({ "state": state, "history": history, "corrupted": corrupted }))
             }
             "api/persistence/save" => {
                 let mut state = params
@@ -131,6 +136,7 @@ fn response_json(payload: model::ResponsePayload) -> Value {
         body_truncated,
         body_bytes,
         body_preview_limit,
+        content_length,
         final_url,
         redirect_count,
         total_ms,
@@ -152,6 +158,7 @@ fn response_json(payload: model::ResponsePayload) -> Value {
             "sizeBytes": body_bytes
         },
         "previewLimitBytes": body_preview_limit,
+        "contentLength": content_length,
         "finalUrl": final_url,
         "redirectCount": redirect_count,
         "timing": {

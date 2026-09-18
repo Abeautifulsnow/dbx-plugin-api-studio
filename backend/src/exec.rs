@@ -208,6 +208,10 @@ async fn run_request_inner(spec: &ValidatedRequest) -> Result<ResponsePayload, A
         request_id,
         status,
         status_text,
+        content_length: headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+            .and_then(|(_, value)| value.trim().parse::<u64>().ok()),
         headers,
         content_type,
         body_text,

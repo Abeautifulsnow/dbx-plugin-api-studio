@@ -90,6 +90,23 @@ const LEGACY_STATE = {
             },
           ],
         },
+        {
+          id: "req_other",
+          type: "request",
+          name: "Other GET",
+          request: {
+            version: 1,
+            name: "Other GET",
+            method: "GET",
+            url: "https://example.test/other",
+            query: [],
+            headers: [],
+            auth: { type: "none" },
+            body: { type: "none", text: "" },
+            variables: [],
+            settings: { timeoutMs: 15000, followRedirects: true, maxRedirects: 5, verifyTls: true },
+          },
+        },
       ],
     },
   ],
@@ -396,7 +413,69 @@ try {
       );
     }
 
-    /* 8. regression: switching the auth type must reach the sidecar spec.
+    /* 8. regression: edits/switches during an in-flight send must not corrupt
+       history or bleed state across requests. The mock is slowed for
+       api/request so the editor can be switched while the request is in
+       flight. */
+    const slowed = await evaluate(
+      `(() => {
+         const original = window.dbxPlugin.invoke;
+         window.dbxPlugin.invoke = (method, params, options) => {
+           if (method === "api/request") {
+             return new Promise((resolve, reject) => {
+               setTimeout(() => original(method, params, options).then(resolve, reject), 900);
+             });
+           }
+           return original(method, params, options);
+         };
+         return "ok";
+       })()`,
+    );
+    check("mock host slowed for the race test", slowed === "ok", slowed);
+    await evaluate("document.querySelector('.btn.send')?.click()");
+    // Immediately switch to the sibling request while the send is in flight.
+    await evaluate(
+      "[...document.querySelectorAll('.tree-row__main')].find((button) => button.textContent.includes('Other GET'))?.click()",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    check(
+      "switching to an unsent request shows no response and no in-flight spinner",
+      (await evaluate(
+        "!document.querySelector('.response__meta') && !document.querySelector('.response__sending')",
+      )) === true,
+    );
+    await waitFor(
+      "window.__calls.filter((call) => call.method === 'api/request').length >= 2",
+      "the delayed in-flight send",
+      10000,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    check(
+      "history records the request that was SENT, not the editor state at completion",
+      (await evaluate("document.querySelector('.history-row')?.textContent ?? ''")).includes("/v1/items"),
+      await evaluate("document.querySelector('.history-row')?.textContent ?? ''"),
+    );
+    check(
+      "the completing request's error/outcome does not bleed into the other pane",
+      (await evaluate(
+        "!document.querySelector('.response__meta') && !document.querySelector('.error-card') && !document.querySelector('.response__sending')",
+      )) === true,
+    );
+    // Back to the original request: its response must be intact.
+    const backOnA = await evaluate(
+      "(() => { const row = [...document.querySelectorAll('.tree-row__main')].find((button) => button.textContent.includes('Legacy GET')); if (!row) return 'row-missing'; row.click(); return 'clicked'; })()",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    const paneState = await evaluate(
+      "JSON.stringify({ meta: !!document.querySelector('.response__meta'), status: document.querySelector('.response__status')?.textContent ?? null, active: document.querySelector('.tree-row--active')?.textContent?.trim() ?? null, dirty: !!document.querySelector('.dirty-mark') })",
+    );
+    check(
+      "the in-flight response is stored under its own request",
+      backOnA === "clicked" && JSON.parse(paneState).meta === true,
+      `${backOnA} ${paneState}`,
+    );
+
+    /* 9. regression: switching the auth type must reach the sidecar spec.
        The AuthEditor once swapped its local prop copy only, so the request
        kept the old auth, the token the user typed landed in an orphan object,
        and the UI snapped back on remount. */
@@ -414,9 +493,9 @@ try {
     check("bearer token field is rendered after switching auth type", tokenFilled === "ok", tokenFilled);
     await evaluate("document.querySelector('.btn.send')?.click()");
     await waitFor(
-      "window.__calls.filter((call) => call.method === 'api/request').length >= 2",
-      "the second send",
-      8000,
+      "window.__calls.filter((call) => call.method === 'api/request').length >= 3",
+      "the auth-regression send",
+      10000,
     );
     const sentHeaders = await evaluate(
       "JSON.stringify(window.__calls.filter((call) => call.method === 'api/request').at(-1)?.params?.headers ?? [])",
