@@ -46,7 +46,7 @@
 <aside class="sidebar" class:sidebar--collapsed={collapsed}>
   <div class="brand">
     <span class="brand__mark" aria-hidden="true">
-      <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+      <svg width="18" height="18" viewBox="0 0 16 16">
         {@html LOGO_PATHS}
       </svg>
     </span>

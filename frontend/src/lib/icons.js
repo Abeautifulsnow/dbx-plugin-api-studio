@@ -40,6 +40,14 @@ export const ICON_PATHS = {
   sparkline: '<path d="M2.5 11l3-3.5 2.5 2 3.5-5" />',
 };
 
-/** App logo: a small brand mark in the same family (no emoji, no raster icon). */
+/**
+ * App logo: the brand "X-molecule" mark — four nodes joined by a crossing,
+ * mirroring assets/plugin.svg. Brand blue is baked in (a logo must not follow
+ * the host theme accent); the tile behind it comes from .brand__mark.
+ */
 export const LOGO_PATHS =
-  '<path d="M3 13V6.5L8 3l5 3.5V13" /><path d="M6 13V9.2M10 13V9.2" />';
+  '<path d="M4.9 4.9 11.1 11.1M11.1 4.9 4.9 11.1" fill="none" stroke="#2F6FE8" stroke-width="2" stroke-linecap="round"/>' +
+  '<circle cx="4.3" cy="4.3" r="1.55" fill="#2F6FE8"/>' +
+  '<circle cx="11.7" cy="4.3" r="1.85" fill="#2F6FE8"/>' +
+  '<circle cx="4.3" cy="11.7" r="1.85" fill="#2F6FE8"/>' +
+  '<circle cx="11.7" cy="11.7" r="1.55" fill="#2F6FE8"/>';
