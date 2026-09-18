@@ -23,7 +23,9 @@ pub const DEFAULT_BODY_BYTES: usize = 2 * 1024 * 1024;
 /// previews therefore stop at 4 MiB raw (~5.3 MiB encoded).
 pub const MAX_BINARY_PREVIEW_BYTES: usize = 4 * 1024 * 1024;
 
-pub const METHODS: [&str; 5] = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+pub const METHODS: [&str; 7] = [
+    "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS",
+];
 
 /// The JSON-RPC transport rejects any single message over 8 MiB. serde_json can
 /// expand control characters up to 6x while escaping, so the byte-based body
@@ -96,6 +98,9 @@ pub struct RequestSpec {
     pub body: RequestBody,
     #[serde(default)]
     pub settings: RequestSettings,
+    /// Cookie-jar identity; requests sharing a key share cookies (PRD §19).
+    #[serde(default)]
+    pub jar_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -112,6 +117,65 @@ pub struct RequestBody {
     pub kind: String,
     #[serde(default)]
     pub text: Option<String>,
+    #[serde(default)]
+    pub parts: Vec<MultipartPart>,
+}
+
+/// One field of a multipart/form-data body. `file` parts reference a local
+/// path that the sidecar reads at send time — file bytes never cross the
+/// UI→sidecar bridge.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MultipartPart {
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub value: String,
+    #[serde(default)]
+    pub path: String,
+}
+
+/// The body a validated request carries to the transport.
+#[derive(Debug)]
+pub enum RequestBodyPayload {
+    None,
+    Raw(String),
+    Multipart(Vec<(String, MultipartSource)>),
+}
+
+#[derive(Debug)]
+pub enum MultipartSource {
+    Text(String),
+    File { path: String, filename: String },
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProxyConfig {
+    #[serde(default)]
+    pub mode: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
+}
+
+/// Proxy plan for the transport. `System` keeps the client default (environment
+/// proxies), `None` disables proxying, `Custom` routes through the given
+/// http/https/socks5 URL.
+#[derive(Debug)]
+pub enum ProxyPlan {
+    System,
+    None,
+    Custom {
+        url: String,
+        username: Option<String>,
+        password: Option<String>,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -127,6 +191,8 @@ pub struct RequestSettings {
     pub verify_tls: bool,
     #[serde(default = "default_body_bytes")]
     pub max_body_bytes: usize,
+    #[serde(default)]
+    pub proxy: ProxyConfig,
 }
 
 fn default_timeout() -> u64 {
@@ -150,6 +216,7 @@ impl Default for RequestSettings {
             max_redirects: 10,
             verify_tls: true,
             max_body_bytes: DEFAULT_BODY_BYTES,
+            proxy: ProxyConfig::default(),
         }
     }
 }
@@ -161,7 +228,11 @@ pub struct ValidatedRequest {
     pub method: String,
     pub url: url::Url,
     pub headers: Vec<(String, String)>,
-    pub body_text: Option<String>,
+    pub body: RequestBodyPayload,
+    pub proxy: ProxyPlan,
+    /// Cookie-jar identity. Requests sharing a jar key share cookies for the
+    /// lifetime of the sidecar (PRD §19: per-collection jar).
+    pub jar_key: Option<String>,
     pub timeout_ms: u64,
     pub follow_redirects: bool,
     pub max_redirects: u32,
@@ -264,14 +335,111 @@ pub fn validate_spec(spec: RequestSpec) -> Result<ValidatedRequest, ApiError> {
         headers.push((name, header.value));
     }
 
-    let body_text = match spec.body.kind.as_str() {
-        "" | "none" => None,
-        "raw" => Some(spec.body.text.unwrap_or_default()),
+    let body = match spec.body.kind.as_str() {
+        "" | "none" => RequestBodyPayload::None,
+        "raw" => RequestBodyPayload::Raw(spec.body.text.unwrap_or_default()),
+        "multipart" => {
+            if spec.body.parts.is_empty() {
+                return Err(ApiError::invalid_request(
+                    "Multipart body needs at least one part",
+                ));
+            }
+            let mut parts = Vec::with_capacity(spec.body.parts.len());
+            for part in &spec.body.parts {
+                let name = part.name.trim().to_string();
+                if name.is_empty() {
+                    return Err(ApiError::invalid_request(
+                        "Multipart part needs a non-empty name",
+                    ));
+                }
+                let source = match part.kind.as_str() {
+                    "" | "text" => MultipartSource::Text(part.value.clone()),
+                    "file" => {
+                        let path = part.path.trim().to_string();
+                        if path.is_empty() {
+                            return Err(ApiError::invalid_request(&format!(
+                                "Multipart file part \"{name}\" needs a file path"
+                            )));
+                        }
+                        let filename = std::path::Path::new(&path)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_else(|| path.clone());
+                        MultipartSource::File { path, filename }
+                    }
+                    other => {
+                        return Err(ApiError::invalid_request(&format!(
+                            "Unknown multipart part kind: {other}"
+                        )))
+                    }
+                };
+                parts.push((name, source));
+            }
+            RequestBodyPayload::Multipart(parts)
+        }
         other => {
             return Err(ApiError::invalid_request(&format!(
                 "Unknown body type: {other}"
             )))
         }
+    };
+
+    // The transport generates the multipart boundary itself; a user-set
+    // Content-Type would carry a stale or missing boundary and corrupt the
+    // request, so it is dropped rather than honored.
+    if matches!(body, RequestBodyPayload::Multipart(_)) {
+        headers.retain(|(name, _)| !name.eq_ignore_ascii_case("content-type"));
+    }
+
+    let proxy = match spec.settings.proxy.mode.as_str() {
+        "" | "system" => ProxyPlan::System,
+        "none" => ProxyPlan::None,
+        "custom" => {
+            let proxy_url = spec.settings.proxy.url.trim().to_string();
+            let parsed_proxy = url::Url::parse(&proxy_url).map_err(|_| {
+                ApiError::invalid_request(&format!("Invalid proxy URL: {proxy_url}"))
+            })?;
+            if !matches!(
+                parsed_proxy.scheme(),
+                "http" | "https" | "socks5" | "socks5h"
+            ) {
+                return Err(ApiError::invalid_request(
+                    "Proxy URL must use http, https or socks5",
+                ));
+            }
+            let username = spec.settings.proxy.username.trim().to_string();
+            let password = spec.settings.proxy.password.clone();
+            ProxyPlan::Custom {
+                url: proxy_url,
+                username: (!username.is_empty()).then_some(username),
+                password: (!password.is_empty()).then_some(password),
+            }
+        }
+        other => {
+            return Err(ApiError::invalid_request(&format!(
+                "Unknown proxy mode: {other}"
+            )))
+        }
+    };
+
+    let jar_key = match &spec.jar_key {
+        Some(key) => {
+            let key = key.trim().to_string();
+            if key.is_empty() {
+                None
+            } else if key.len() <= 128
+                && key
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+            {
+                Some(key)
+            } else {
+                return Err(ApiError::invalid_request(
+                    "jarKey must be 1-128 characters of [A-Za-z0-9._-]",
+                ));
+            }
+        }
+        None => None,
     };
 
     let settings = spec.settings;
@@ -280,7 +448,9 @@ pub fn validate_spec(spec: RequestSpec) -> Result<ValidatedRequest, ApiError> {
         method,
         url: parsed,
         headers,
-        body_text,
+        body,
+        proxy,
+        jar_key,
         timeout_ms: settings.timeout_ms.clamp(1, MAX_TIMEOUT_MS),
         follow_redirects: settings.follow_redirects,
         max_redirects: settings.max_redirects.clamp(0, 20),

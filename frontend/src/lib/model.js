@@ -54,6 +54,7 @@ export function defaultRequest() {
       followRedirects: true,
       maxRedirects: 10,
       verifyTls: true,
+      proxy: { mode: "system", url: "", username: "", password: "" },
     },
   };
 }
@@ -105,6 +106,18 @@ function normalizeRow(raw, { secret = false } = {}) {
   };
 }
 
+function normalizeMultipartRow(raw) {
+  const row = asObject(raw);
+  return {
+    id: typeof row.id === "string" && row.id ? row.id : uid("kv"),
+    enabled: row.enabled !== false,
+    name: String(row.name ?? ""),
+    kind: row.kind === "file" ? "file" : "text",
+    value: String(row.value ?? ""),
+    path: String(row.path ?? ""),
+  };
+}
+
 function normalizeRequest(raw) {
   const request = asObject(raw);
   const base = defaultRequest();
@@ -120,11 +133,22 @@ function normalizeRequest(raw) {
     body: {
       type: asObject(request.body).type || "none",
       text: String(request.body?.text ?? ""),
-      // `urlencoded` bodies are edited as rows and serialized into `text`.
-      rows: asArray(request.body?.rows).map((row) => normalizeRow(row)),
+      // `urlencoded` bodies are edited as rows and serialized into `text`;
+      // multipart rows carry name/kind/value/path.
+      rows: asArray(request.body?.rows).map((row) =>
+        (asObject(request.body).type || "none") === "multipart"
+          ? normalizeMultipartRow(row)
+          : normalizeRow(row),
+      ),
     },
     variables: asArray(request.variables).map((row) => normalizeRow(row, { secret: true })),
     settings: { ...base.settings, ...asObject(request.settings) },
+  };
+  normalized.settings.proxy = {
+    mode: String(asObject(normalized.settings.proxy).mode || "system"),
+    url: String(asObject(normalized.settings.proxy).url || ""),
+    username: String(asObject(normalized.settings.proxy).username || ""),
+    password: String(asObject(normalized.settings.proxy).password || ""),
   };
 
   // Saved credentials are stored as the `[REDACTED]` placeholder (or emptied).
@@ -139,6 +163,8 @@ function normalizeRequest(raw) {
   }
   // ... and in the URL itself, where a credential query parameter is stored
   // redacted: drop the pair instead of sending the placeholder.
+  // The proxy password is a credential with the same treatment.
+  if (normalized.settings.proxy.password === REDACTED) normalized.settings.proxy.password = "";
   const urlPairs = parseUrlQuery(normalized.url);
   if (urlPairs.pairs.some((pair) => pair.value === REDACTED && isSensitiveQueryName(pair.key))) {
     normalized.url = rebuildUrlQuery(

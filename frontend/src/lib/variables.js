@@ -155,8 +155,29 @@ export function buildSendSpec(request, requestId, scope, options = {}) {
   }
 
   let bodyText;
+  let bodyParts = null;
   const bodyType = request.body?.type || "none";
-  if (bodyType !== "none") {
+  if (bodyType === "multipart") {
+    // Only names, values and paths cross the bridge — the sidecar reads file
+    // bytes itself at send time. The transport generates the multipart
+    // boundary, so a user Content-Type would corrupt the request and is
+    // dropped below instead of honored.
+    bodyParts = [];
+    for (const row of request.body?.rows || []) {
+      if (!row.enabled || !String(row.name || "").trim()) continue;
+      const name = resolveString(row.name, scope, maskSecrets);
+      if (collect("body", name)) continue;
+      if (row.kind === "file") {
+        const path = resolveString(row.path || "", scope, maskSecrets);
+        if (collect("body", path)) continue;
+        bodyParts.push({ name: name.value, kind: "file", value: "", path: path.value });
+      } else {
+        const value = resolveString(row.value || "", scope, maskSecrets);
+        if (collect("body", value)) continue;
+        bodyParts.push({ name: name.value, kind: "text", value: value.value, path: "" });
+      }
+    }
+  } else if (bodyType !== "none") {
     const resolvedBody = resolveString(request.body?.text || "", scope, maskSecrets);
     collect("body", resolvedBody);
     bodyText = resolvedBody.value;
@@ -172,18 +193,44 @@ export function buildSendSpec(request, requestId, scope, options = {}) {
       headers.push({ name: "Content-Type", value: contentType });
     }
   }
+  if (bodyType === "multipart") {
+    const contentTypeIndex = headers.findIndex(
+      (header) => header.name.toLowerCase() === "content-type",
+    );
+    if (contentTypeIndex >= 0) headers.splice(contentTypeIndex, 1);
+  }
 
   if (!url.value.trim() || urlBroken || !isHttpUrl(url.value)) {
     issues.url = { ...(issues.url || {}), invalid: true };
   }
 
   const settings = request.settings || {};
+  const proxy = settings.proxy || {};
   const spec = {
     requestId,
     method: request.method,
     url: url.value,
     headers,
-    body: bodyText == null ? { type: "none" } : { type: "raw", text: bodyText },
+    body:
+      bodyType === "multipart"
+        ? { type: "multipart", parts: bodyParts }
+        : bodyText == null
+          ? { type: "none" }
+          : { type: "raw", text: bodyText },
+    // Only non-default proxy plans travel; "system" is the transport default.
+    ...(proxy.mode === "none"
+      ? { proxy: { mode: "none" } }
+      : proxy.mode === "custom"
+        ? {
+            proxy: {
+              mode: "custom",
+              url: proxy.url || "",
+              username: proxy.username || "",
+              password: proxy.password || "",
+            },
+          }
+        : {}),
+    jarKey: options.jarKey || null,
     settings: {
       timeoutMs: clampInt(settings.timeoutMs, 1000, 300000, 30000),
       followRedirects: settings.followRedirects !== false,

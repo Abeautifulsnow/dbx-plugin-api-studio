@@ -181,6 +181,23 @@ export function sanitizeRequestForPersistence(request) {
     value: isSensitiveQueryName(row.key) ? redactCredentialValue(row.value) : row.value,
   }));
 
+  // Multipart text parts are form fields: a credential-named part holds a
+  // credential. File parts only carry a path — no credential bytes.
+  if (copy.body?.type === "multipart") {
+    copy.body.rows = (copy.body.rows || []).map((row) => ({
+      ...row,
+      value:
+        row.kind !== "file" && isSensitiveHeaderName(row.name)
+          ? redactCredentialValue(row.value)
+          : row.value,
+    }));
+  }
+
+  // A configured proxy password is a credential like any other.
+  if (copy.settings?.proxy?.password) {
+    copy.settings.proxy.password = redactCredentialValue(copy.settings.proxy.password);
+  }
+
   copy.url = redactUrlForHistory(copy.url);
   return copy;
 }

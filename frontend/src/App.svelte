@@ -35,6 +35,7 @@
   } from "./lib/variables.js";
   import CommandRow from "./components/CommandRow.svelte";
   import ConfirmDialog from "./components/ConfirmDialog.svelte";
+  import CurlImportDialog from "./components/CurlImportDialog.svelte";
   import EnvironmentDialog from "./components/EnvironmentDialog.svelte";
   import HeaderBar from "./components/HeaderBar.svelte";
   import Icon from "./components/Icon.svelte";
@@ -93,6 +94,7 @@
   let pendingAction = $state(null);
   let pendingSend = $state(false);
   let envOpen = $state(false);
+  let importOpen = $state(false);
 
   let toasts = $state([]);
   let polite = $state("");
@@ -491,6 +493,8 @@
     const requestId = uid("call");
     const { spec, issues } = buildSendSpec(current.request, requestId, scope, {
       previewCapBytes: settings.previewCapBytes,
+      // Per-collection cookie jar; unsaved drafts share the draft jar (PRD §19).
+      jarKey: current.collectionId ?? "draft",
     });
     if (Object.keys(issues).length) {
       sendIssues = issues;
@@ -586,6 +590,62 @@
   }
 
   /**
+   * Import a pasted cURL command into a NEW draft request. The sidecar parses
+   * the command (shell tokenizer + recognized flags); anything it could not map
+   * comes back as a warning toast. The dialog closes once parsing succeeded;
+   * applying the parsed request still goes through the unsaved-changes guard.
+   */
+  async function importCurlCommand(command) {
+    const result = await api.importCurl(command);
+    const imported = result?.request || {};
+    importOpen = false;
+    guard(() => {
+      const request = defaultRequest();
+      request.name = t("importedName");
+      request.method = imported.method || "GET";
+      request.url = imported.url || "";
+      request.headers = (imported.headers || []).map((header) => newRow(header.key, header.value));
+      request.auth = imported.auth && imported.auth.type ? imported.auth : { type: "none" };
+      request.body = {
+        type: imported.body?.type || "none",
+        text: String(imported.body?.text ?? ""),
+        rows: (imported.body?.rows || []).map((row) => ({ ...newRow(row.key, row.value) })),
+      };
+      if (imported.body?.type === "multipart") {
+        request.body.type = "multipart";
+        request.body.rows = (imported.body.parts || []).map((part) => ({
+          ...newRow(part.name, part.value || ""),
+          kind: part.kind || "text",
+          path: part.path || "",
+        }));
+      }
+      Object.assign(request.settings, imported.settings || {});
+      current = {
+        id: uid("req"),
+        request,
+        dirty: true,
+        bodyRedacted: false,
+        collectionId: null,
+      };
+      syncQueryFromUrl(request.url);
+      activeTab = "params";
+      sendIssues = {};
+      (result.warnings || []).forEach((warning) => toast(`${t("importCurl")}: ${warning}`));
+      toast(t("curlImported"));
+    });
+  }
+
+  /** Cookie jars live per collection; clearing drops the sidecar-side jar. */
+  async function clearCookies() {
+    try {
+      await api.clearCookies(current.collectionId ?? "draft");
+      toast(t("cookiesCleared"));
+    } catch (failure) {
+      toast(failure?.message ?? String(failure));
+    }
+  }
+
+  /**
    * Copy as cURL semantics (decided): the command reproduces the request as it
    * would be sent, so literal credentials are included — Postman-style. Only
    * secret {{references}} stay as placeholders, so a shared command never
@@ -641,9 +701,14 @@
       y: event.clientY,
       items: [
         { id: "curl", label: t("copyAsCurl"), hint: t("copyAsCurlHint"), icon: "copy" },
+        { id: "import", label: t("importCurl"), icon: "download" },
         { id: "save", label: t("save"), icon: "save", disabled: !current.dirty },
       ],
-      onSelect: (id) => (id === "curl" ? copyCurl() : saveCurrent()),
+      onSelect: (id) => {
+        if (id === "curl") copyCurl();
+        else if (id === "import") importOpen = true;
+        else saveCurrent();
+      },
     };
   }
 
@@ -933,6 +998,7 @@
         onRetry={() => send()}
         onCopyText={(text) => copyToClipboard(text)}
         onPromoteToEnv={promoteToEnvironment}
+        onClearCookies={clearCookies}
       />
 
       {#if loadError}
@@ -1032,6 +1098,14 @@
       </button>
     {/snippet}
   </Modal>
+{/if}
+
+{#if importOpen}
+  <CurlImportDialog
+    {t}
+    onCancel={() => (importOpen = false)}
+    onImport={importCurlCommand}
+  />
 {/if}
 
 {#if envOpen}

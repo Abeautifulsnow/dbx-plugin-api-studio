@@ -11,6 +11,8 @@ mod persist;
 
 use dbx_plugin_sdk::{PluginEmitter, PluginError, PluginHandler, PluginMetadata, PluginServer, RequestContext};
 use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use crate::exec::InFlightRegistry;
 use crate::model::{ApiError, ExecOutcome};
@@ -23,6 +25,10 @@ const PLUGIN_ID: &str = "io.dbx.api-studio";
 struct Plugin {
     registry: InFlightRegistry,
     storage: Option<FilePersistence>,
+    /// Cookie jars keyed by jar identity (PRD §19: per-collection jar). Jars
+    /// live for the sidecar's lifetime and are never written to disk — cookie
+    /// values are session data and must not persist like collections.
+    jars: Mutex<HashMap<String, Arc<reqwest::cookie::Jar>>>,
 }
 
 impl Plugin {
@@ -30,6 +36,21 @@ impl Plugin {
         self.storage.as_ref().ok_or_else(|| {
             PluginError::new(-32000, "Local storage is unavailable on this machine")
         })
+    }
+
+    fn jar_for(&self, key: &str) -> Arc<reqwest::cookie::Jar> {
+        let mut jars = self.jars.lock().expect("cookie jars lock poisoned");
+        jars.entry(key.to_string())
+            .or_insert_with(|| Arc::new(reqwest::cookie::Jar::default()))
+            .clone()
+    }
+
+    fn clear_jar(&self, key: &str) -> bool {
+        self.jars
+            .lock()
+            .expect("cookie jars lock poisoned")
+            .remove(key)
+            .is_some()
     }
 }
 
@@ -60,7 +81,8 @@ impl PluginHandler for Plugin {
                     .map_err(|e| PluginError::new(-32602, format!("Invalid request: {e}")))?;
                 let validated = model::validate_spec(spec).map_err(api_error)?;
                 let cancel = self.registry.register(&validated.request_id);
-                match exec::execute(validated, &self.registry, cancel) {
+                let jar = validated.jar_key.as_ref().map(|key| self.jar_for(key));
+                match exec::execute(validated, &self.registry, cancel, jar) {
                     ExecOutcome::Response(payload) => {
                         let mut payload = response_json(payload);
                         model::fit_payload_to_transport(&mut payload);
@@ -88,6 +110,22 @@ impl PluginHandler for Plugin {
             "api/export-curl" => {
                 let spec = params.take();
                 curl::export(spec).map_err(api_error).map(|command| json!({ "curl": command }))
+            }
+            "api/import-curl" => {
+                let input = params
+                    .get("curl")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| PluginError::new(-32602, "Missing curl"))?;
+                let command = curl::parse_import(input).map_err(api_error)?;
+                Ok(command)
+            }
+            "api/cookies/clear" => {
+                let jar_key = params
+                    .get("jarKey")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| PluginError::new(-32602, "Missing jarKey"))?;
+                let cleared = self.clear_jar(jar_key);
+                Ok(json!({ "cleared": cleared }))
             }
             "api/persistence/load" => {
                 let storage = self.storage()?;
@@ -182,6 +220,7 @@ fn main() -> std::io::Result<()> {
     let plugin = Plugin {
         registry: InFlightRegistry::default(),
         storage,
+        jars: Mutex::new(HashMap::new()),
     };
     let metadata = PluginMetadata::new(PLUGIN_ID, env!("CARGO_PKG_VERSION"));
     PluginServer::new(metadata, plugin).serve()

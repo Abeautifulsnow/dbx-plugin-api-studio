@@ -1,7 +1,7 @@
 <script>
   import Icon from "./Icon.svelte";
 
-  const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+  const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"];
 
   /**
    * Method + URL + Send/Save row. The method always shows its text; the colour

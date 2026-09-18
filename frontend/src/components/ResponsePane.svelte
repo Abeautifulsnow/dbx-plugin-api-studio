@@ -33,6 +33,7 @@
     onRetry = () => {},
     onCopyText = () => {},
     onPromoteToEnv = null,
+    onClearCookies = null,
   } = $props();
 
   const TABS = [
@@ -272,6 +273,14 @@
         <p class="empty-state">{t("noResponse")}</p>
       {/if}
     {:else if tab === "cookies"}
+      {#if onClearCookies}
+        <div class="response-toolbar">
+          <button type="button" class="btn" onclick={onClearCookies}>
+            <Icon name="trash" />
+            <span>{t("clearCookies")}</span>
+          </button>
+        </div>
+      {/if}
       {#if cookieCount}
         <div class="headers-table">
           {#each cookies as cookie (cookie.id)}

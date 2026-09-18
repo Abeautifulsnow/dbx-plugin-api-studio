@@ -13,7 +13,8 @@ use base64::Engine;
 use tokio::sync::watch;
 
 use crate::model::{
-    ApiError, ExecOutcome, ResponsePayload, ValidatedRequest, canonical_reason, sanitize_cause,
+    ApiError, ExecOutcome, MultipartSource, RequestBodyPayload, ResponsePayload, ValidatedRequest,
+    canonical_reason, sanitize_cause,
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
@@ -67,18 +68,20 @@ fn runtime() -> &'static tokio::runtime::Runtime {
     })
 }
 
-/// Execute `spec`, racing it against cancellation.
+/// Execute `spec`, racing it against cancellation. `jar` is the shared cookie
+/// jar for this request's jar key (PRD §19); `None` runs cookie-less.
 pub fn execute(
     spec: ValidatedRequest,
     registry: &InFlightRegistry,
     cancel: CancelToken,
+    jar: Option<std::sync::Arc<reqwest::cookie::Jar>>,
 ) -> ExecOutcome {
     let request_id = spec.request_id.clone();
     let mut rx = cancel.subscribe();
     let result = runtime().block_on(async move {
         let mut cancelled = *rx.borrow();
         tokio::select! {
-            outcome = run_request(spec) => outcome,
+            outcome = run_request(spec, jar) => outcome,
             _ = async {
                 while !cancelled {
                     if rx.changed().await.is_err() {
@@ -95,9 +98,9 @@ pub fn execute(
     result
 }
 
-async fn run_request(spec: ValidatedRequest) -> ExecOutcome {
+async fn run_request(spec: ValidatedRequest, jar: Option<std::sync::Arc<reqwest::cookie::Jar>>) -> ExecOutcome {
     let request_id = spec.request_id.clone();
-    match run_request_inner(&spec).await {
+    match run_request_inner(&spec, jar).await {
         Ok(payload) => ExecOutcome::Response(payload),
         Err(error) => ExecOutcome::Failed {
             request_id,
@@ -107,9 +110,12 @@ async fn run_request(spec: ValidatedRequest) -> ExecOutcome {
     }
 }
 
-async fn run_request_inner(spec: &ValidatedRequest) -> Result<ResponsePayload, ApiError> {
+async fn run_request_inner(
+    spec: &ValidatedRequest,
+    jar: Option<std::sync::Arc<reqwest::cookie::Jar>>,
+) -> Result<ResponsePayload, ApiError> {
     let request_id = spec.request_id.clone();
-    let (client, redirect_counter) = build_client(spec).map_err(|e| {
+    let (client, redirect_counter) = build_client(spec, jar).map_err(|e| {
         ApiError::transport(
             "INTERNAL_ERROR",
             format!("Failed to build client: {}", sanitize_cause(&e.to_string())),
@@ -122,8 +128,39 @@ async fn run_request_inner(spec: &ValidatedRequest) -> Result<ResponsePayload, A
     for (name, value) in &spec.headers {
         builder = builder.header(name.as_str(), value.as_str());
     }
-    if let Some(text) = &spec.body_text {
-        builder = builder.body(text.clone());
+    match &spec.body {
+        RequestBodyPayload::None => {}
+        RequestBodyPayload::Raw(text) => {
+            builder = builder.body(text.clone());
+        }
+        RequestBodyPayload::Multipart(parts) => {
+            let mut form = reqwest::multipart::Form::new();
+            for (name, source) in parts {
+                let part = match source {
+                    MultipartSource::Text(value) => reqwest::multipart::Part::text(value.clone()),
+                    MultipartSource::File { path, filename } => {
+                        // The sidecar reads the file with the user's own
+                        // permissions; file bytes never cross the RPC bridge.
+                        let bytes = std::fs::read(path).map_err(|e| {
+                            ApiError::invalid_request(&format!(
+                                "Cannot read file for multipart part \"{name}\": {}",
+                                sanitize_cause(&e.to_string())
+                            ))
+                        })?;
+                        let mut part =
+                            reqwest::multipart::Part::bytes(bytes).file_name(filename.clone());
+                        if let Some(mime) = mime_for(filename) {
+                            part = part.mime_str(mime).map_err(|_| {
+                                ApiError::invalid_request(&format!("Invalid mime type: {mime}"))
+                            })?;
+                        }
+                        part
+                    }
+                };
+                form = form.part(name.clone(), part);
+            }
+            builder = builder.multipart(form);
+        }
     }
     let builder = builder;
 
@@ -177,30 +214,36 @@ async fn run_request_inner(spec: &ValidatedRequest) -> Result<ResponsePayload, A
     let total_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
     let download_ms = total_ms.saturating_sub(ttfb_ms);
 
-    let (body_text, body_base64, body_bytes, preview_limit, truncated) = match String::from_utf8(body)
-    {
-        Ok(text) => {
-            let received = text.len() as u64;
-            (Some(text), None, received, max_bytes as u64, truncated)
-        }
-        Err(err) => {
-            let raw = err.into_bytes();
-            // Binary travels base64-encoded inside the same 8 MiB JSON-RPC
-            // message; a 6 MiB binary would encode to exactly 8 MiB and the
-            // transport would drop the entire response. Clamp the binary
-            // preview and tell the UI which limit was enforced. body_bytes
-            // reports the preview actually delivered, matching the text path
-            // where the read loop stops at the cap.
-            let limit = max_bytes.min(crate::model::MAX_BINARY_PREVIEW_BYTES);
-            let delivered = limit.min(raw.len());
-            let encoded = base64::engine::general_purpose::STANDARD.encode(&raw[..delivered]);
-            (
-                None,
-                Some(encoded),
-                delivered as u64,
-                limit as u64,
-                truncated || delivered < raw.len(),
-            )
+    // HEAD responses carry no body by definition; report null rather than an
+    // empty string so the UI shows "no preview" instead of an empty pane.
+    let (body_text, body_base64, body_bytes, preview_limit, truncated) = if spec.method == "HEAD" {
+        (None, None, 0u64, max_bytes as u64, false)
+    } else {
+        match String::from_utf8(body) {
+            Ok(text) => {
+                let received = text.len() as u64;
+                (Some(text), None, received, max_bytes as u64, truncated)
+            }
+            Err(err) => {
+                let raw = err.into_bytes();
+                // Binary travels base64-encoded inside the same 8 MiB JSON-RPC
+                // message; a 6 MiB binary would encode to exactly 8 MiB and the
+                // transport would drop the entire response. Clamp the binary
+                // preview and tell the UI which limit was enforced. body_bytes
+                // reports the preview actually delivered, matching the text path
+                // where the read loop stops at the cap.
+                let limit = max_bytes.min(crate::model::MAX_BINARY_PREVIEW_BYTES);
+                let delivered = limit.min(raw.len());
+                let encoded =
+                    base64::engine::general_purpose::STANDARD.encode(&raw[..delivered]);
+                (
+                    None,
+                    Some(encoded),
+                    delivered as u64,
+                    limit as u64,
+                    truncated || delivered < raw.len(),
+                )
+            }
         }
     };
 
@@ -229,6 +272,7 @@ async fn run_request_inner(spec: &ValidatedRequest) -> Result<ResponsePayload, A
 
 fn build_client(
     spec: &ValidatedRequest,
+    jar: Option<std::sync::Arc<reqwest::cookie::Jar>>,
 ) -> Result<(reqwest::Client, Arc<AtomicUsize>), reqwest::Error> {
     let max_redirects = spec.max_redirects as usize;
     let (policy, counter): (reqwest::redirect::Policy, Arc<AtomicUsize>) = if spec.follow_redirects
@@ -248,7 +292,26 @@ fn build_client(
         (reqwest::redirect::Policy::none(), Arc::new(AtomicUsize::new(0)))
     };
 
-    let client = reqwest::Client::builder()
+    let mut builder = reqwest::Client::builder();
+    match &spec.proxy {
+        crate::model::ProxyPlan::System => {}
+        crate::model::ProxyPlan::None => builder = builder.no_proxy(),
+        crate::model::ProxyPlan::Custom {
+            url,
+            username,
+            password,
+        } => {
+            let mut proxy = reqwest::Proxy::all(url)?;
+            if let Some(username) = username {
+                proxy = proxy.basic_auth(username, password.as_deref().unwrap_or(""));
+            }
+            builder = builder.proxy(proxy);
+        }
+    }
+    if let Some(jar) = jar {
+        builder = builder.cookie_provider(jar);
+    }
+    let client = builder
         .user_agent(USER_AGENT)
         .redirect(policy)
         .connect_timeout(CONNECT_TIMEOUT)
@@ -256,6 +319,32 @@ fn build_client(
         .danger_accept_invalid_certs(!spec.verify_tls)
         .build()?;
     Ok((client, counter))
+}
+
+/// Minimal extension→MIME mapping for multipart file parts; unknown extensions
+/// default to the transport's application/octet-stream.
+fn mime_for(filename: &str) -> Option<&'static str> {
+    let extension = filename.rsplit('.').next()?.to_ascii_lowercase();
+    let mime = match extension.as_str() {
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "svg" => "image/svg+xml",
+        "webp" => "image/webp",
+        "pdf" => "application/pdf",
+        "json" => "application/json",
+        "csv" => "text/csv",
+        "txt" | "log" | "md" => "text/plain",
+        "html" | "htm" => "text/html",
+        "xml" => "application/xml",
+        "zip" => "application/zip",
+        "gz" | "gzip" => "application/gzip",
+        "mp3" => "audio/mpeg",
+        "mp4" => "video/mp4",
+        "wasm" => "application/wasm",
+        _ => return None,
+    };
+    Some(mime)
 }
 
 /// Map a send-phase failure to the stable error taxonomy. reqwest lumps DNS,
@@ -331,11 +420,79 @@ mod tests {
     }
 
     fn run(spec: serde_json::Value) -> ExecOutcome {
+        run_with_jar(spec, None)
+    }
+
+    fn run_with_jar(
+        spec: serde_json::Value,
+        jar: Option<std::sync::Arc<reqwest::cookie::Jar>>,
+    ) -> ExecOutcome {
         let spec: RequestSpec = serde_json::from_value(spec).unwrap();
         let validated = validate_spec(spec).unwrap();
         let registry = InFlightRegistry::default();
         let cancel = registry.register(&validated.request_id);
-        execute(validated, &registry, cancel)
+        execute(validated, &registry, cancel, jar)
+    }
+
+    /// Reads the entire request (headers + Content-Length body) and responds
+    /// with the request body as the response body — for asserting on what the
+    /// transport actually put on the wire.
+    fn spawn_echo_server() -> (std::net::SocketAddr, std::thread::JoinHandle<()>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handle = std::thread::spawn(move || {
+            use std::io::Write;
+            let Ok((mut socket, _)) = listener.accept() else {
+                return;
+            };
+            let request = read_full_request(&mut socket);
+            let body_start = request
+                .windows(4)
+                .position(|window| window == b"\r\n\r\n")
+                .map(|index| index + 4)
+                .unwrap_or(request.len());
+            let body = &request[body_start..];
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            );
+            let _ = socket.write_all(response.as_bytes());
+            let _ = socket.write_all(body);
+        });
+        (addr, handle)
+    }
+
+    /// Read one HTTP request: headers first, then exactly Content-Length body
+    /// bytes. Reading to EOF would deadlock against keep-alive clients.
+    fn read_full_request(socket: &mut std::net::TcpStream) -> Vec<u8> {
+        use std::io::Read;
+        let mut request = Vec::new();
+        let mut buffer = [0u8; 8192];
+        let header_end = loop {
+            match socket.read(&mut buffer) {
+                Ok(0) | Err(_) => return request,
+                Ok(n) => {
+                    request.extend_from_slice(&buffer[..n]);
+                    if let Some(index) = request.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break index + 4;
+                    }
+                }
+            }
+        };
+        let header_text = String::from_utf8_lossy(&request[..header_end]);
+        let content_length = header_text
+            .lines()
+            .find(|line| line.to_ascii_lowercase().starts_with("content-length:"))
+            .and_then(|line| line.split(':').nth(1))
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        while request.len() < header_end + content_length {
+            match socket.read(&mut buffer) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => request.extend_from_slice(&buffer[..n]),
+            }
+        }
+        request
     }
 
     /// Minimal HTTP/1.1 test server on an ephemeral localhost port. Serves the
@@ -471,7 +628,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(150));
             assert!(registry_clone.cancel("t1"));
         });
-        let outcome = execute(validated, &registry, cancel);
+        let outcome = execute(validated, &registry, cancel, None);
         server.join().unwrap();
         handle.join().unwrap();
         match outcome {
@@ -609,5 +766,136 @@ mod tests {
         };
         assert_eq!(category, "CONNECT_FAILED");
         assert!(!cause.is_empty());
+    }
+
+    #[test]
+    fn multipart_body_delivers_text_and_file_parts() {
+        let file_path = std::env::temp_dir().join(format!(
+            "api-studio-mp-{}-{}.bin",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&file_path, "file-bytes").unwrap();
+
+        let (addr, server) = spawn_echo_server();
+        let mut spec = spec_json("POST", &format!("http://{addr}/upload"));
+        spec["body"] = serde_json::json!({
+            "type": "multipart",
+            "parts": [
+                { "name": "note", "kind": "text", "value": "hello" },
+                { "name": "doc", "kind": "file", "path": file_path.to_string_lossy() },
+            ],
+        });
+        let outcome = run(spec);
+        server.join().unwrap();
+        let _ = std::fs::remove_file(&file_path);
+
+        let ExecOutcome::Response(payload) = outcome else {
+            panic!("expected a response, got {outcome:?}")
+        };
+        let echoed = payload.body_text.expect("multipart echoes as text");
+        assert!(echoed.contains("name=\"note\""), "{echoed:?}");
+        assert!(echoed.contains("hello"), "{echoed:?}");
+        assert!(echoed.contains("filename="), "{echoed:?}");
+        assert!(echoed.contains("file-bytes"), "{echoed:?}");
+    }
+
+    #[test]
+    fn multipart_rejects_a_file_part_without_a_path() {
+        let spec = serde_json::json!({
+            "requestId": "mp-bad",
+            "method": "POST",
+            "url": "http://127.0.0.1:1/upload",
+            "headers": [],
+            "body": { "type": "multipart", "parts": [ { "name": "doc", "kind": "file", "path": "" } ] },
+            "settings": {}
+        });
+        let spec: RequestSpec = serde_json::from_value(spec).unwrap();
+        let error = validate_spec(spec).unwrap_err();
+        assert_eq!(error.category, "INVALID_REQUEST");
+        assert!(error.message.contains("file path"), "{}", error.message);
+    }
+
+    #[test]
+    fn cookie_jar_persists_session_cookie_across_requests() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            // Connection 1: hand out a session cookie.
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut buffer = [0u8; 4096];
+            let _ = socket.read(&mut buffer);
+            let _ = socket.write_all(
+                b"HTTP/1.1 200 OK\r\nSet-Cookie: sid=j1; Path=/\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+            );
+            // Connection 2: capture whatever Cookie header the client now sends.
+            let (mut socket, _) = listener.accept().unwrap();
+            let request = read_full_request(&mut socket);
+            let text = String::from_utf8_lossy(&request);
+            let cookie_line = text
+                .lines()
+                .find(|line| line.to_ascii_lowercase().starts_with("cookie:"))
+                .unwrap_or("cookie: none");
+            let body = format!("captured {cookie_line}");
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = socket.write_all(response.as_bytes());
+        });
+
+        let jar = std::sync::Arc::new(reqwest::cookie::Jar::default());
+        run_with_jar(spec_json("GET", &format!("http://{addr}/login")), Some(jar.clone()));
+        let outcome = run_with_jar(spec_json("GET", &format!("http://{addr}/profile")), Some(jar));
+        server.join().unwrap();
+
+        let ExecOutcome::Response(payload) = outcome else {
+            panic!("expected a response, got {outcome:?}")
+        };
+        let echoed = payload.body_text.expect("cookie capture echoes as text");
+        assert!(echoed.contains("sid=j1"), "{echoed}");
+    }
+
+    #[test]
+    fn requests_without_a_jar_stay_cookie_less() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut buffer = [0u8; 4096];
+            let _ = socket.read(&mut buffer);
+            let _ = socket.write_all(
+                b"HTTP/1.1 200 OK\r\nSet-Cookie: sid=j2; Path=/\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+            );
+            let (mut socket, _) = listener.accept().unwrap();
+            let request = read_full_request(&mut socket);
+            let text = String::from_utf8_lossy(&request);
+            let has_cookie = text
+                .lines()
+                .any(|line| line.to_ascii_lowercase().starts_with("cookie:"));
+            let body = format!("cookie-present:{has_cookie}");
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = socket.write_all(response.as_bytes());
+        });
+
+        run(spec_json("GET", &format!("http://{addr}/login")));
+        let outcome = run(spec_json("GET", &format!("http://{addr}/profile")));
+        server.join().unwrap();
+
+        let ExecOutcome::Response(payload) = outcome else {
+            panic!("expected a response, got {outcome:?}")
+        };
+        let echoed = payload.body_text.expect("echo as text");
+        assert!(echoed.contains("cookie-present:false"), "{echoed}");
     }
 }

@@ -264,6 +264,59 @@ check(
   migratedRequest.headers.find((row) => row.key === "Accept").value === "[REDACTED]",
 );
 
+/* ------------------------------------------- multipart rows & proxy password */
+
+const withMultipart = migrateState({
+  collections: [
+    {
+      id: "c",
+      type: "collection",
+      name: "C",
+      items: [
+        {
+          id: "r",
+          type: "request",
+          name: "Upload",
+          request: {
+            method: "POST",
+            url: "https://x.test/upload",
+            headers: [],
+            query: [],
+            auth: { type: "none" },
+            body: {
+              type: "multipart",
+              text: "",
+              rows: [
+                { name: "note", kind: "text", value: "hi", enabled: true },
+                { name: "doc", kind: "file", path: "/tmp/me.png", enabled: true },
+              ],
+            },
+            settings: { proxy: { mode: "custom", url: "socks5://p.test:1080", username: "u", password: "[REDACTED]" } },
+          },
+        },
+      ],
+    },
+  ],
+  environments: [],
+  settings: {},
+});
+const mpRequest = withMultipart.collections[0].items[0].request;
+check(
+  "multipart rows keep name/kind/path through migration",
+  mpRequest.body.rows.length === 2 &&
+    mpRequest.body.rows[0].name === "note" &&
+    mpRequest.body.rows[1].kind === "file" &&
+    mpRequest.body.rows[1].path === "/tmp/me.png",
+);
+check(
+  "multipart rows get ids (keyed editor stays safe)",
+  mpRequest.body.rows.every((row) => typeof row.id === "string" && row.id),
+);
+check(
+  "a redacted proxy password loads as empty",
+  mpRequest.settings.proxy.password === "" && mpRequest.settings.proxy.mode === "custom",
+);
+
 /* ------------------------------------------------------------ query reconcile */
 
 const queryRows = mergeQueryRows(

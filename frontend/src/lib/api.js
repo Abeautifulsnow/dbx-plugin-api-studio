@@ -55,6 +55,16 @@ export async function clearHistory() {
   return invoke("api/persistence/history-clear", {});
 }
 
+/** Drop the session cookie jar for a jar identity (per-collection). */
+export async function clearCookies(jarKey) {
+  return invoke("api/cookies/clear", { jarKey });
+}
+
+/** Parse a pasted cURL command into an editor request on the sidecar. */
+export async function importCurl(command) {
+  return invoke("api/import-curl", { curl: command }, { timeoutMs: 10000 });
+}
+
 /**
  * Execute a request. Resolves to `{ cancelled: true }` when the sidecar reports
  * a neutral cancellation, otherwise the normalized response payload.

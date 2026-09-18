@@ -322,5 +322,83 @@ check(
     "https://api.test/users?page=2&api_key=x",
 );
 
+/* --------------------------------------------------- multipart / proxy / jar */
+
+const multipartRequest = {
+  method: "POST",
+  url: "https://api.test/upload",
+  headers: [{ id: "h1", key: "Content-Type", value: "text/plain", enabled: true }],
+  query: [],
+  auth: { type: "none" },
+  body: {
+    type: "multipart",
+    rows: [
+      { id: "p1", name: "note", kind: "text", value: "hello", enabled: true },
+      { id: "p2", name: "doc", kind: "file", path: "{{base_dir}}/me.png", enabled: true },
+      { id: "p3", name: "", kind: "text", value: "no-name", enabled: true },
+    ],
+  },
+  variables: [],
+  settings: {},
+};
+const multipartScope = variableScope(
+  { variables: [{ id: "b", key: "base_dir", value: "/data" }] },
+  {},
+);
+const multipartFold = buildSendSpec(multipartRequest, "mp1", multipartScope, {});
+check(
+  "multipart folds text and file parts with resolved variables",
+  JSON.stringify(multipartFold.spec.body) ===
+    JSON.stringify({
+      type: "multipart",
+      parts: [
+        { name: "note", kind: "text", value: "hello", path: "" },
+        { name: "doc", kind: "file", value: "", path: "/data/me.png" },
+      ],
+    }),
+  JSON.stringify(multipartFold.spec.body),
+);
+check(
+  "multipart drops a user content-type (the transport owns the boundary)",
+  !multipartFold.spec.headers.some((header) => header.name.toLowerCase() === "content-type"),
+);
+check("multipart nameless rows are skipped", multipartFold.spec.body.parts.length === 2);
+
+const proxyCustomSpec = buildSendSpec(
+  {
+    ...baseRequest,
+    settings: {
+      ...baseRequest.settings,
+      proxy: { mode: "custom", url: "socks5://127.0.0.1:1080", username: "u", password: "p" },
+    },
+  },
+  "px1",
+  emptyScope,
+).spec;
+check(
+  "a custom proxy travels with credentials",
+  JSON.stringify(proxyCustomSpec.proxy) ===
+    JSON.stringify({ mode: "custom", url: "socks5://127.0.0.1:1080", username: "u", password: "p" }),
+  JSON.stringify(proxyCustomSpec.proxy),
+);
+const proxyNoneSpec = buildSendSpec(
+  {
+    ...baseRequest,
+    settings: { ...baseRequest.settings, proxy: { mode: "none", url: "", username: "", password: "" } },
+  },
+  "px2",
+  emptyScope,
+).spec;
+check("proxy none travels as none", JSON.stringify(proxyNoneSpec.proxy) === JSON.stringify({ mode: "none" }));
+check(
+  "system proxy stays implicit (no proxy key)",
+  !("proxy" in buildSendSpec({ ...baseRequest, settings: { ...baseRequest.settings, proxy: { mode: "system" } } }, "px3", emptyScope).spec),
+);
+check(
+  "the cookie jar key travels to the spec",
+  buildSendSpec(baseRequest, "j1", emptyScope, { jarKey: "col_1" }).spec.jarKey === "col_1" &&
+    buildSendSpec(baseRequest, "j2", emptyScope).spec.jarKey === null,
+);
+
 console.log(failures ? `LIBRARY CHECKS FAILED (${failures})` : "ALL LIBRARY CHECKS PASSED");
 process.exit(failures ? 1 : 0);

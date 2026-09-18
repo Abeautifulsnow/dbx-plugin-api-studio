@@ -513,6 +513,66 @@ try {
         "[...document.querySelectorAll('.auth__option')].find((button) => button.textContent.includes('Bearer'))?.classList.contains('auth__option--active') ?? false",
       )) === true,
     );
+
+    /* 10. regression: cURL import fills a fresh draft through the sidecar parser. */
+    // The mock host learns api/import-curl on top of its existing handlers.
+    await evaluate(
+      `(() => {
+         const original = window.dbxPlugin.invoke;
+         window.dbxPlugin.invoke = (method, params, options) => {
+           window.__calls.push({ method, params });
+           if (method === "api/import-curl") {
+             return Promise.resolve({
+               request: {
+                 method: "POST", url: "https://import.test/v1/orders",
+                 headers: [{ key: "X-Custom", value: "1" }],
+                 auth: { type: "bearer", token: "imp-token" },
+                 body: { type: "json", text: "{\\"a\\":1}" },
+                 settings: {},
+               },
+               warnings: [],
+             });
+           }
+           return original(method, params, options);
+         };
+         return "ok";
+       })()`,
+    );
+    await evaluate("document.querySelector('.command-row .icon-btn')?.click()");
+    const menuOpened = await waitFor("!!document.querySelector('.menu')", "the command menu", 4000);
+    check("command menu opens", menuOpened);
+    await evaluate(
+      "[...document.querySelectorAll('.menu__item')].find((button) => button.textContent.includes('Import cURL'))?.click()",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    check("import dialog opens", (await evaluate("!!document.querySelector('#curl-input')")) === true);
+    await evaluate(
+      "(() => { const area = document.querySelector('#curl-input'); area.value = 'curl https://import.test/v1/orders -X POST'; area.dispatchEvent(new Event('input', { bubbles: true })); return 'ok'; })()",
+    );
+    await evaluate(
+      "[...document.querySelectorAll('.modal__foot .btn')].find((button) => button.textContent.trim() === 'Import')?.click()",
+    );
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    // The previous regression section left the editor dirty, so applying the
+    // import raises the unsaved-changes guard; accept with Save.
+    const guardShown = await evaluate("!!document.querySelector('#unsaved-title')");
+    if (guardShown) {
+      await evaluate(
+        "[...document.querySelectorAll('.modal__foot .btn')].find((button) => button.textContent.includes('Save'))?.click()",
+      );
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    }
+    check(
+      "imported request fills the editor (URL visible in the command row)",
+      (await evaluate("document.querySelector('.url-input')?.value ?? ''")) === "https://import.test/v1/orders",
+      await evaluate("document.querySelector('.url-input')?.value ?? ''"),
+    );
+    check(
+      "imported request reached the sidecar parser",
+      (await evaluate(
+        "window.__calls.some((call) => call.method === 'api/import-curl')",
+      )) === true,
+    );
   }
 } catch (error) {
   failures += 1;

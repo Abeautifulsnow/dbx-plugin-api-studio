@@ -702,6 +702,27 @@
   color: var(--api-primary);
 }
 
+/* Multipart editor: Text-part and File-part add buttons share a row. */
+.mp-add {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.mp-add .kv__add {
+  flex: 1;
+  justify-content: center;
+}
+
+/* Section heading inside the settings panel (Proxy group). */
+.settings-panel__section {
+  margin: var(--space-4) 0 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--api-border);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--api-muted);
+}
+
 /* ------------------------------------------------------------- auth editor */
 
 .auth {

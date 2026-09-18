@@ -4,6 +4,7 @@
   import { CONTENT_TYPES } from "../lib/variables.js";
   import Icon from "./Icon.svelte";
   import KeyValueEditor from "./KeyValueEditor.svelte";
+  import MultipartEditor from "./MultipartEditor.svelte";
 
   /**
    * Body editor. `urlencoded` gets a real key/value table — the previous UI
@@ -17,6 +18,7 @@
     { id: "json", label: "bodyJson" },
     { id: "text", label: "bodyText" },
     { id: "urlencoded", label: "bodyForm" },
+    { id: "multipart", label: "bodyMultipart" },
   ];
 
   let gutter = $state(null);
@@ -112,6 +114,33 @@
         ...(body.rows || []).slice(index + 1),
       ];
       syncFormRows();
+    }}
+  />
+{:else if body.type === "multipart"}
+  <MultipartEditor
+    rows={body.rows || []}
+    nameLabel={t("key")}
+    typeLabel={t("partKind")}
+    valueLabel={t("value")}
+    pathLabel={t("filePath")}
+    textOption={t("partText")}
+    fileOption={t("partFile")}
+    {t}
+    onChange={onChange}
+    onAddText={() => {
+      body.rows = [...(body.rows || []), { ...newRow(), name: "", kind: "text", value: "", path: "" }];
+      onChange();
+    }}
+    onAddFile={() => {
+      body.rows = [
+        ...(body.rows || []),
+        { ...newRow(), name: "", kind: "file", value: "", path: "" },
+      ];
+      onChange();
+    }}
+    onRemove={(row) => {
+      body.rows = (body.rows || []).filter((item) => item.id !== row.id);
+      onChange();
     }}
   />
 {:else if body.type !== "none"}

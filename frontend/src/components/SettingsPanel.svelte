@@ -43,6 +43,9 @@
     4 * 1024 * 1024,
     6 * 1024 * 1024,
   ];
+
+  // `settings.proxy` is normalized on load; guard for safety anyway.
+  const proxyMode = $derived(settings.proxy?.mode || "system");
 </script>
 
 <div class="settings-panel">
@@ -122,6 +125,57 @@
     <p class="notice notice--warning" role="alert">
       <Icon name="alert" />
       <span>{t("tlsWarning")}</span>
+    </p>
+  {/if}
+
+  <h3 class="settings-panel__section">{t("proxy")}</h3>
+  <div class="field">
+    <label class="field__label" for="proxy-mode">{t("proxyMode")}</label>
+    <select
+      id="proxy-mode"
+      class="select"
+      value={proxyMode}
+      onchange={(event) => {
+        settings.proxy.mode = event.currentTarget.value;
+        onChange();
+      }}
+    >
+      <option value="system">{t("proxySystem")}</option>
+      <option value="none">{t("proxyNone")}</option>
+      <option value="custom">{t("proxyCustom")}</option>
+    </select>
+  </div>
+
+  {#if proxyMode === "custom"}
+    <div class="field">
+      <label class="field__label" for="proxy-url">{t("proxyUrl")}</label>
+      <input
+        id="proxy-url"
+        class="input mono"
+        bind:value={settings.proxy.url}
+        placeholder="http://127.0.0.1:8080 或 socks5://…"
+        spellcheck="false"
+        oninput={onChange}
+      />
+    </div>
+    <div class="field">
+      <label class="field__label" for="proxy-user">{t("usernameLabel")}</label>
+      <input id="proxy-user" class="input" bind:value={settings.proxy.username} autocomplete="off" oninput={onChange} />
+    </div>
+    <div class="field">
+      <label class="field__label" for="proxy-pass">{t("passwordLabel")}</label>
+      <input
+        id="proxy-pass"
+        class="input mono"
+        type="password"
+        bind:value={settings.proxy.password}
+        autocomplete="off"
+        oninput={onChange}
+      />
+    </div>
+    <p class="notice notice--info">
+      <Icon name="info" />
+      <span>{t("proxyNote")}</span>
     </p>
   {/if}
 </div>
