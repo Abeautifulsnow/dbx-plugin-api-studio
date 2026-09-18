@@ -85,7 +85,9 @@ jobs:
 
   package:
     needs: create-release
-    uses: t8y2/dbx/.github/workflows/plugin-release-reusable.yml@plugin-sdk-v1
+    # Pinned to the latest commit touching the reusable workflow (the
+    # scaffold's `plugin-sdk-v1` ref does not exist upstream).
+    uses: t8y2/dbx/.github/workflows/plugin-release-reusable.yml@31ca3f773a02fabe7f23505cce93e7346c6394f8
     with:
       release-tag: ${{ inputs.tag || github.ref_name }}
       package-command: |
